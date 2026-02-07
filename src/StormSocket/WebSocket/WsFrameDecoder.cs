@@ -22,9 +22,22 @@ public static class WsFrameDecoder
         buffer.Slice(0, headerLength).CopyTo(header);
 
         bool fin = (header[0] & 0x80) != 0;
+        byte rsv = (byte)((header[0] >> 4) & 0x07);
         WsOpCode opCode = (WsOpCode)(header[0] & 0x0F);
         bool masked = (header[1] & 0x80) != 0;
         long payloadLength = header[1] & 0x7F;
+
+        // RFC 6455 Section 5.2: RSV bits must be 0 unless an extension is negotiated
+        if (rsv != 0)
+        {
+            throw new WsProtocolException(WsCloseStatus.ProtocolError, $"Non-zero RSV bits: 0x{rsv:X}");
+        }
+
+        // RFC 6455 Section 5.2: Unknown opcodes must fail the connection
+        if (opCode is not (WsOpCode.Continuation or WsOpCode.Text or WsOpCode.Binary or WsOpCode.Close or WsOpCode.Ping or WsOpCode.Pong))
+        {
+            throw new WsProtocolException(WsCloseStatus.ProtocolError, $"Unknown opcode: 0x{(byte)opCode:X}");
+        }
 
         int offset = 2;
 
@@ -47,6 +60,12 @@ public static class WsFrameDecoder
             
             payloadLength = (long)BinaryPrimitives.ReadUInt64BigEndian(header.Slice(2));
             offset = 10;
+        }
+
+        bool isControl = opCode is WsOpCode.Close or WsOpCode.Ping or WsOpCode.Pong;
+        if (isControl && payloadLength > 125)
+        {
+            throw new WsProtocolException(WsCloseStatus.ProtocolError, $"Control frame payload too large: {payloadLength} bytes (max: 125)");
         }
 
         if (payloadLength > maxFrameSize)
