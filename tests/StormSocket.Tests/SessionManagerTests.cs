@@ -1,3 +1,4 @@
+using System.Net;
 using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Session;
@@ -14,7 +15,9 @@ public class SessionManagerTests
         public ConnectionState State => ConnectionState.Connected;
         
         public ConnectionMetrics Metrics { get; } = new();
-        
+
+        public EndPoint? RemoteEndPoint => null;
+
         public IReadOnlySet<string> Groups => new HashSet<string>();
         
         public List<byte[]> SentData { get; } = [];

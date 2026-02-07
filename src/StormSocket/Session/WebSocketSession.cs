@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using StormSocket.Core;
@@ -24,6 +25,7 @@ public sealed class WebSocketSession : ISession
     public long Id { get; }
     public ConnectionState State => _state;
     public ConnectionMetrics Metrics { get; } = new();
+    public EndPoint? RemoteEndPoint { get; }
 
     public IReadOnlySet<string> Groups
     {
@@ -38,10 +40,11 @@ public sealed class WebSocketSession : ISession
 
     internal ITransport Transport => _transport;
 
-    internal WebSocketSession(long id, ITransport transport)
+    internal WebSocketSession(long id, ITransport transport, EndPoint? remoteEndPoint)
     {
         Id = id;
         _transport = transport;
+        RemoteEndPoint = remoteEndPoint;
         _state = ConnectionState.Connected;
     }
 

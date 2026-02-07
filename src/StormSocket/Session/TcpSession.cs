@@ -1,3 +1,4 @@
+using System.Net;
 using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Transport;
@@ -15,6 +16,7 @@ public sealed class TcpSession : ISession
     public long Id { get; }
     public ConnectionState State => _state;
     public ConnectionMetrics Metrics { get; } = new();
+    public EndPoint? RemoteEndPoint { get; }
 
     public IReadOnlySet<string> Groups
     {
@@ -30,11 +32,12 @@ public sealed class TcpSession : ISession
     internal ITransport Transport => _transport;
     internal PipeConnection Connection => _connection;
 
-    internal TcpSession(long id, ITransport transport, PipeConnection connection)
+    internal TcpSession(long id, ITransport transport, PipeConnection connection, EndPoint? remoteEndPoint)
     {
         Id = id;
         _transport = transport;
         _connection = connection;
+        RemoteEndPoint = remoteEndPoint;
         _state = ConnectionState.Connected;
     }
 
