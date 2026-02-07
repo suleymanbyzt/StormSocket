@@ -1,0 +1,50 @@
+namespace StormSocket.WebSocket;
+
+// 5.2. Base Framing Protocol
+// https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2
+// Opcode:  4 bits
+//     Defines the interpretation of the "Payload data".  If an unknown
+// opcode is received, the receiving endpoint MUST _Fail the
+// WebSocket Connection_.  The following values are defined.
+//     *  %x0 denotes a continuation frame
+//     *  %x1 denotes a text frame
+//     *  %x2 denotes a binary frame
+//     *  %x3-7 are reserved for further non-control frames
+//     *  %x8 denotes a connection close
+//     *  %x9 denotes a ping
+// *  %xA denotes a pong
+// *  %xB-F are reserved for further control frames
+//
+// Mask:  1 bit
+//     Defines whether the "Payload data" is masked.  If set to 1, a
+//     masking key is present in masking-key, and this is used to unmask
+//     the "Payload data" as per Section 5.3.  All frames sent from
+//     client to server have this bit set to 1.
+//
+//     Payload length:  7 bits, 7+16 bits, or 7+64 bits
+//     The length of the "Payload data", in bytes: if 0-125, that is the
+//     payload length.  If 126, the following 2 bytes interpreted as a
+//     16-bit unsigned integer are the payload length.  If 127, the
+//     following 8 bytes interpreted as a 64-bit unsigned integer (the
+//     most significant bit MUST be 0) are the payload length.  Multibyte
+//     length quantities are expressed in network byte order.  Note that
+//     in all cases, the minimal number of bytes MUST be used to encode
+//     the length, for example, the length of a 124-byte-long string
+//     can't be encoded as the sequence 126, 0, 124.  The payload length
+//     is the length of the "Extension data" + the length of the
+//     "Application data".  The length of the "Extension data" may be
+//     zero, in which case the payload length is the length of the
+//     "Application data".
+
+/// <summary>
+/// WebSocket frame opcodes as defined in RFC 6455 Section 5.2.
+/// </summary>
+public enum WsOpCode : byte
+{
+    Continuation = 0x0, // %x0 denotes a continuation frame. (ignored for now)
+    Text = 0x1, // %x1 denotes a text frame
+    Binary = 0x2, // %x2 denotes a binary frame
+    Close = 0x8, // %x8 denotes a connection close
+    Ping = 0x9, // %x9 denotes a ping
+    Pong = 0xA, // %xA denotes a pong
+}

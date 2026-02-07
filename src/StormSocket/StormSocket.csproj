@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>StormSocket</RootNamespace>
+    <AssemblyName>StormSocket</AssemblyName>
+
+    <!-- NuGet Package -->
+    <PackageId>StormSocket</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>StormSocket Contributors</Authors>
+    <Description>Modern, high-performance, event-based TCP/WebSocket/SSL server library for .NET</Description>
+    <PackageTags>tcp;websocket;ssl;tls;server;socket;networking;high-performance;pipelines</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/suleymanbyzt/StormSocket</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StormSocket.Tests" />
+  </ItemGroup>
+
+</Project>
