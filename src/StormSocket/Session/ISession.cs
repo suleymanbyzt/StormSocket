@@ -1,3 +1,4 @@
+using System.Net;
 using StormSocket.Core;
 
 namespace StormSocket.Session;
@@ -21,6 +22,11 @@ public interface ISession : IAsyncDisposable
     /// Tracks bytes sent/received and connection uptime.
     /// </summary>
     ConnectionMetrics Metrics { get; }
+
+    /// <summary>
+    /// The remote client's IP address and port.
+    /// </summary>
+    EndPoint? RemoteEndPoint { get; }
 
     /// <summary>
     /// Set of group names this session belongs to.

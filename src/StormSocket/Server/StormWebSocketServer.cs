@@ -69,7 +69,16 @@ public class StormWebSocketServer : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        _listenSocket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        if (_options.DualMode)
+        {
+            _listenSocket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            _listenSocket.DualMode = true;
+        }
+        else
+        {
+            _listenSocket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        }
+
         _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
         if (_options.NoDelay)
@@ -77,7 +86,11 @@ public class StormWebSocketServer : IAsyncDisposable
             _listenSocket.NoDelay = true;
         }
 
-        _listenSocket.Bind(_options.EndPoint);
+        IPEndPoint bindEndPoint = _options.DualMode
+            ? new IPEndPoint(IPAddress.IPv6Any, _options.EndPoint.Port)
+            : _options.EndPoint;
+
+        _listenSocket.Bind(bindEndPoint);
         _listenSocket.Listen(_options.Backlog);
 
         _acceptTask = AcceptLoopAsync(_cts.Token);
@@ -191,7 +204,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 return;
             }
 
-            session = new WebSocketSession(id, transport);
+            session = new WebSocketSession(id, transport, socket.RemoteEndPoint);
             Sessions.TryAdd(session);
 
             // Route socket errors to the server's OnError event
