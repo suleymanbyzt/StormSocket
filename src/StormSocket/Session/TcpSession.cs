@@ -8,13 +8,24 @@ public sealed class TcpSession : ISession
 {
     private readonly PipeConnection _connection;
     private readonly ITransport _transport;
+    private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
     private volatile ConnectionState _state;
 
     public long Id { get; }
     public ConnectionState State => _state;
     public ConnectionMetrics Metrics { get; } = new();
-    public IReadOnlySet<string> Groups => _groups;
+
+    public IReadOnlySet<string> Groups
+    {
+        get
+        {
+            lock (_groupLock)
+            {
+                return new HashSet<string>(_groups);
+            }
+        }
+    }
 
     internal ITransport Transport => _transport;
     internal PipeConnection Connection => _connection;
@@ -52,8 +63,21 @@ public sealed class TcpSession : ISession
         _state = ConnectionState.Closed;
     }
 
-    public void JoinGroup(string group) => _groups.Add(group);
-    public void LeaveGroup(string group) => _groups.Remove(group);
+    public void JoinGroup(string group)
+    {
+        lock (_groupLock)
+        {
+            _groups.Add(group);
+        }
+    }
+
+    public void LeaveGroup(string group)
+    {
+        lock (_groupLock)
+        {
+            _groups.Remove(group);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {

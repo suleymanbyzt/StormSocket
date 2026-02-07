@@ -110,4 +110,39 @@ public class WsFrameTests
         ReadOnlySequence<byte> buffer = new ReadOnlySequence<byte>([0x81]);
         Assert.False(WsFrameDecoder.TryDecodeFrame(ref buffer, out _));
     }
+
+    [Fact]
+    public void Decode_ReservedOpcode_ThrowsProtocolError()
+    {
+        byte[] frame = [0x83, 0x00]; // FIN + opcode 0x3, no payload
+        ReadOnlySequence<byte> buffer = new ReadOnlySequence<byte>(frame);
+
+        WsProtocolException ex = Assert.Throws<WsProtocolException>(() => WsFrameDecoder.TryDecodeFrame(ref buffer, out _));
+        Assert.Equal(WsCloseStatus.ProtocolError, ex.CloseStatus);
+    }
+
+    [Fact]
+    public void Decode_NonZeroRsvBits_ThrowsProtocolError()
+    {
+        byte[] frame = [0xC1, 0x00];
+        ReadOnlySequence<byte> buffer = new ReadOnlySequence<byte>(frame);
+
+        WsProtocolException ex = Assert.Throws<WsProtocolException>(() =>
+            WsFrameDecoder.TryDecodeFrame(ref buffer, out _));
+        Assert.Equal(WsCloseStatus.ProtocolError, ex.CloseStatus);
+    }
+
+    [Fact]
+    public void Decode_ControlFramePayloadTooLarge_ThrowsProtocolError()
+    {
+        byte[] frame = new byte[2 + 2 + 126];
+        frame[0] = 0x89; // FIN + Ping
+        frame[1] = 126;
+        frame[2] = 0;
+        frame[3] = 126;
+        ReadOnlySequence<byte> buffer = new ReadOnlySequence<byte>(frame);
+
+        WsProtocolException ex = Assert.Throws<WsProtocolException>(() => WsFrameDecoder.TryDecodeFrame(ref buffer, out _));
+        Assert.Equal(WsCloseStatus.ProtocolError, ex.CloseStatus);
+    }
 }

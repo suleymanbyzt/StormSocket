@@ -11,13 +11,21 @@
     <!-- NuGet Package -->
     <PackageId>StormSocket</PackageId>
     <Version>0.1.0</Version>
-    <Authors>StormSocket Contributors</Authors>
-    <Description>Modern, high-performance, event-based TCP/WebSocket/SSL server library for .NET</Description>
+    <Authors>suleymanbyzt</Authors>
+    <Description>Modern, high-performance, event-based TCP/WebSocket/SSL server library for .NET built on System.IO.Pipelines. Zero subclassing — just subscribe to events and go.</Description>
     <PackageTags>tcp;websocket;ssl;tls;server;socket;networking;high-performance;pipelines</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>stormsocket.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/suleymanbyzt/StormSocket</PackageProjectUrl>
     <RepositoryUrl>https://github.com/suleymanbyzt/StormSocket</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+    <None Include="..\..\stormsocket.png" Pack="true" PackagePath="" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
