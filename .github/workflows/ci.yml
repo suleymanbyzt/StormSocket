@@ -10,28 +10,33 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CI_TFM: net6.0;net7.0;net8.0;net9.0
-
 jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            dotnet: |
+              6.0.x
+              7.0.x
+              8.0.x
+              9.0.x
+            tfm: "net6.0;net7.0;net8.0;net9.0"
+          - os: windows-latest
+            dotnet: |
+              8.0.x
+              9.0.x
+            tfm: "net8.0;net9.0"
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: fast-actions/setup-dotnet@v1
+        uses: actions/setup-dotnet@v4
         with:
-          sdk-version: |
-            6.0.x
-            7.0.x
-            8.0.x
-            9.0.x
+          dotnet-version: ${{ matrix.dotnet }}
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -41,13 +46,13 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet restore "-p:TargetFrameworks=${{ matrix.tfm }}"
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -warnaserror -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet build --no-restore --configuration Release -warnaserror "-p:TargetFrameworks=${{ matrix.tfm }}"
 
       - name: Test
         run: dotnet test --no-build --configuration Release
 
       - name: Pack
-        run: dotnet pack --no-build --configuration Release -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet pack --no-build --configuration Release "-p:TargetFrameworks=${{ matrix.tfm }}"
