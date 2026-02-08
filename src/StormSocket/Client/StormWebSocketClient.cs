@@ -99,7 +99,8 @@ public class StormWebSocketClient : IAsyncDisposable
         string host = uri.Host;
         int port = uri.Port > 0 ? uri.Port : (useSsl ? 443 : 80);
 
-        Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        Socket socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+        socket.DualMode = true;
         if (_options.NoDelay)
         {
             socket.NoDelay = true;

@@ -206,6 +206,7 @@ public class TcpServerIntegrationTests
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             MaxPendingSendBytes = 1024 * 16,
+            SendBufferSize = 1024,
             SlowConsumerPolicy = SlowConsumerPolicy.Disconnect,
         });
 
@@ -224,7 +225,7 @@ public class TcpServerIntegrationTests
             ISession slowSession = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             // Fire-and-forget: flood data until backpressure triggers Disconnect
-            byte[] chunk = new byte[1024 * 8];
+            byte[] chunk = new byte[1024 * 32];
             using CancellationTokenSource floodCts = new();
             Task floodTask = Task.Run(async () =>
             {
@@ -233,7 +234,6 @@ public class TcpServerIntegrationTests
                     try
                     {
                         await slowSession.SendAsync(chunk, floodCts.Token);
-                        await Task.Delay(500);
                     }
                     catch
                     {
