@@ -4,19 +4,22 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Threading.Tasks;
 
 namespace StormSocket.Transport;
 
 /// <summary>
 /// Decorates a raw socket with SSL/TLS using SslStream, then exposes Pipe-based I/O.
+/// Supports both server-mode (AuthenticateAsServer) and client-mode (AuthenticateAsClient).
 /// </summary>
 public sealed class SslTransport : ITransport
 {
     private readonly Socket _socket;
-    private readonly X509Certificate2 _certificate;
+    private readonly X509Certificate2? _certificate;
     private readonly SslProtocols _protocols;
     private readonly bool _clientCertificateRequired;
+    private readonly bool _isClientMode;
+    private readonly string? _targetHost;
+    private readonly RemoteCertificateValidationCallback? _remoteCertValidator;
     private NetworkStream? _networkStream;
     private SslStream? _sslStream;
     private readonly Pipe _receivePipe;
@@ -29,6 +32,9 @@ public sealed class SslTransport : ITransport
     public PipeReader Input => _receivePipe.Reader;
     public PipeWriter Output => _sendPipe.Writer;
 
+    /// <summary>
+    /// Creates a server-mode SSL transport that authenticates as a server using the provided certificate.
+    /// </summary>
     public SslTransport(
         Socket socket,
         X509Certificate2 certificate,
@@ -41,6 +47,29 @@ public sealed class SslTransport : ITransport
         _certificate = certificate ?? throw new ArgumentNullException(nameof(certificate));
         _protocols = protocols;
         _clientCertificateRequired = clientCertificateRequired;
+        _isClientMode = false;
+        _receivePipe = new Pipe(receiveOptions ?? PipeOptions.Default);
+        _sendPipe = new Pipe(sendOptions ?? PipeOptions.Default);
+    }
+
+    /// <summary>
+    /// Creates a client-mode SSL transport that authenticates as a client to the specified host.
+    /// </summary>
+    public SslTransport(
+        Socket socket,
+        string targetHost,
+        SslProtocols protocols = SslProtocols.None,
+        RemoteCertificateValidationCallback? remoteCertificateValidation = null,
+        X509Certificate2? clientCertificate = null,
+        PipeOptions? receiveOptions = null,
+        PipeOptions? sendOptions = null)
+    {
+        _socket = socket ?? throw new ArgumentNullException(nameof(socket));
+        _targetHost = targetHost ?? throw new ArgumentNullException(nameof(targetHost));
+        _protocols = protocols;
+        _isClientMode = true;
+        _remoteCertValidator = remoteCertificateValidation;
+        _certificate = clientCertificate;
         _receivePipe = new Pipe(receiveOptions ?? PipeOptions.Default);
         _sendPipe = new Pipe(sendOptions ?? PipeOptions.Default);
     }
@@ -48,16 +77,33 @@ public sealed class SslTransport : ITransport
     public async ValueTask HandshakeAsync(CancellationToken cancellationToken = default)
     {
         _networkStream = new NetworkStream(_socket, ownsSocket: false);
-        _sslStream = new SslStream(_networkStream, leaveInnerStreamOpen: false);
+        _sslStream = new SslStream(_networkStream, leaveInnerStreamOpen: false, _remoteCertValidator);
 
-        await _sslStream.AuthenticateAsServerAsync(
-            new SslServerAuthenticationOptions
+        if (_isClientMode)
+        {
+            SslClientAuthenticationOptions clientOptions = new SslClientAuthenticationOptions
             {
-                ServerCertificate = _certificate,
+                TargetHost = _targetHost,
                 EnabledSslProtocols = _protocols,
-                ClientCertificateRequired = _clientCertificateRequired,
-            },
-            cancellationToken).ConfigureAwait(false);
+            };
+            if (_certificate is not null)
+            {
+                clientOptions.ClientCertificates = new X509CertificateCollection { _certificate };
+            }
+
+            await _sslStream.AuthenticateAsClientAsync(clientOptions, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await _sslStream.AuthenticateAsServerAsync(
+                new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = _certificate,
+                    EnabledSslProtocols = _protocols,
+                    ClientCertificateRequired = _clientCertificateRequired,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
 
         _receiveTask = ReceiveLoopAsync(_cts.Token);
         _sendTask = SendLoopAsync(_cts.Token);

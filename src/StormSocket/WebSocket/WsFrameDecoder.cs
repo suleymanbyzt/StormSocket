@@ -86,26 +86,41 @@ public static class WsFrameDecoder
         }
 
         // extract payload
-        byte[] payload = new byte[payloadLength];
-        buffer.Slice(offset, payloadLength).CopyTo(payload);
+        ReadOnlySequence<byte> payloadSeq = buffer.Slice(offset, payloadLength);
 
-        // unmask if needed
         if (masked)
         {
+            byte[] payload = new byte[payloadLength];
+            payloadSeq.CopyTo(payload);
+
             Span<byte> maskKey = header.Slice(maskOffset, 4);
-            for (int i = 0; i < payload.Length; i++)
+            for (int i = 0; i < (int)payloadLength; i++)
             {
                 payload[i] ^= maskKey[i & 3];
             }
-        }
 
-        frame = new WsFrame
+            frame = new WsFrame
+            {
+                Fin = fin,
+                OpCode = opCode,
+                Masked = true,
+                Payload = payload,
+            };
+        }
+        else
         {
-            Fin = fin,
-            OpCode = opCode,
-            Masked = masked,
-            Payload = payload,
-        };
+            ReadOnlyMemory<byte> payload = payloadSeq.IsSingleSegment
+                ? payloadSeq.First
+                : payloadSeq.ToArray();
+
+            frame = new WsFrame
+            {
+                Fin = fin,
+                OpCode = opCode,
+                Masked = false,
+                Payload = payload,
+            };
+        }
 
         buffer = buffer.Slice(totalLength);
         return true;

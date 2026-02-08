@@ -29,7 +29,7 @@ public sealed class DelimiterFramer : IMessageFramer
         }
 
         ReadOnlySequence<byte> slice = buffer.Slice(0, position.Value);
-        message = slice.ToArray();
+        message = slice.IsSingleSegment ? slice.First : slice.ToArray();
         buffer = buffer.Slice(buffer.GetPosition(1, position.Value)); // skip delimiter
         return true;
     }

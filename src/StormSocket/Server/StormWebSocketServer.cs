@@ -3,7 +3,6 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Middleware;
@@ -166,9 +165,21 @@ public class StormWebSocketServer : IAsyncDisposable
                 break;
             }
 
+            // Enforce max connections limit
+            if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
+            {
+                clientSocket.Close();
+                continue;
+            }
+
             if (_options.NoDelay)
             {
                 clientSocket.NoDelay = true;
+            }
+
+            if (_options.KeepAlive)
+            {
+                clientSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             }
 
             _ = HandleConnectionAsync(clientSocket, ct);
@@ -204,7 +215,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 return;
             }
 
-            session = new WebSocketSession(id, transport, socket.RemoteEndPoint);
+            session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
             Sessions.TryAdd(session);
 
             // Route socket errors to the server's OnError event
@@ -392,27 +403,33 @@ public class StormWebSocketServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Sends a text message to all connected WebSocket sessions. Optionally excludes one session.</summary>
+    /// <summary>Sends a text message to all connected WebSocket sessions concurrently. Optionally excludes one session.</summary>
     public async ValueTask BroadcastTextAsync(string text, long? excludeId = null, CancellationToken cancellationToken = default)
     {
         byte[] data = Encoding.UTF8.GetBytes(text);
+        List<ValueTask> tasks = [];
         foreach (ISession s in Sessions.All)
         {
             if (s.Id == excludeId)
             {
                 continue;
             }
-            
+
             if (s is WebSocketSession wss)
             {
-                try
-                {
-                    await wss.SendTextAsync(data, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // ignored
-                }
+                tasks.Add(wss.SendTextAsync(data, cancellationToken));
+            }
+        }
+
+        foreach (ValueTask task in tasks)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch
+            {
+                // ignored
             }
         }
     }

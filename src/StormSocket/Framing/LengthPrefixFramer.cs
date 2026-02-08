@@ -47,7 +47,7 @@ public sealed class LengthPrefixFramer : IMessageFramer
         }
 
         ReadOnlySequence<byte> payload = buffer.Slice(HeaderSize, length);
-        message = payload.ToArray();
+        message = payload.IsSingleSegment ? payload.First : payload.ToArray();
         buffer = buffer.Slice(totalLength);
         return true;
     }

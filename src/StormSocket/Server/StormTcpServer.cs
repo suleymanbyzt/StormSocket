@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Framing;
@@ -138,9 +137,22 @@ public class StormTcpServer : IAsyncDisposable
                 break;
             }
 
+            // enforce max connections limit
+            if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
+            {
+                // it might be a good idea to notify the server here
+                clientSocket.Close();
+                continue;
+            }
+
             if (_options.NoDelay)
             {
                 clientSocket.NoDelay = true;
+            }
+
+            if (_options.KeepAlive)
+            {
+                clientSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             }
 
             _ = HandleConnectionAsync(clientSocket, ct);
@@ -200,7 +212,7 @@ public class StormTcpServer : IAsyncDisposable
                     }
                 });
 
-            session = new TcpSession(id, transport, connection, socket.RemoteEndPoint);
+            session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
             Sessions.TryAdd(session);
 
             // Route socket errors to the server's OnError event

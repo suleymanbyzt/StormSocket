@@ -1,4 +1,5 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Server;
 using StormSocket.Samples.WsServer.Handlers;
 using StormSocket.Samples.WsServer.Middleware;
@@ -16,11 +17,15 @@ StormWebSocketServer server = new(new ServerOptions
     Ssl = null,
     WebSocket = new WebSocketOptions
     {
-        PingInterval = TimeSpan.FromSeconds(15),
+        PingInterval = TimeSpan.FromSeconds(1),
         MaxMissedPongs = 3,
         MaxFrameSize = 64 * 1024,
         AutoPong = true,
-    }
+    },
+    SlowConsumerPolicy = SlowConsumerPolicy.Disconnect,
+    DualMode = true,
+    MaxConnections = 10, // set to 0 for unlimited connections
+    KeepAlive = false
 });
 
 UserManager users = new();

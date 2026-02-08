@@ -1,4 +1,5 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Framing;
 
 namespace StormSocket.Server;
@@ -16,6 +17,13 @@ public sealed class ServerOptions
 
     /// <summary>Disables Nagle's algorithm for lower latency. Default: false.</summary>
     public bool NoDelay { get; init; } = false;
+
+    /// <summary>
+    /// Enables TCP Keep-Alive on accepted connections.
+    /// Prevents idle connections from being silently dropped by firewalls, NATs, and load balancers.
+    /// Default: true.
+    /// </summary>
+    public bool KeepAlive { get; init; } = true;
 
     /// <summary>
     /// Enables dual-mode socket that accepts both IPv4 and IPv6 connections on a single port.
@@ -50,6 +58,18 @@ public sealed class ServerOptions
 
     /// <summary>WebSocket-specific settings. Only used by <see cref="StormWebSocketServer"/>.</summary>
     public WebSocketOptions? WebSocket { get; init; }
+
+    /// <summary>
+    /// Maximum number of concurrent connections. 0 = unlimited. Default: 0.
+    /// When the limit is reached, new connections are immediately closed.
+    /// </summary>
+    public int MaxConnections { get; init; } = 0;
+
+    /// <summary>
+    /// Determines behavior when a session's send buffer is full during broadcast.
+    /// Wait = block (default), Drop = skip slow sessions, Disconnect = close slow sessions.
+    /// </summary>
+    public SlowConsumerPolicy SlowConsumerPolicy { get; init; } = SlowConsumerPolicy.Wait;
 
     /// <summary>
     /// Message framing strategy for TCP servers. Null = raw bytes (no framing).

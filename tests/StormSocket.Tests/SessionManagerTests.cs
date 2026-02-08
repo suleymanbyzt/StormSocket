@@ -1,5 +1,4 @@
 using System.Net;
-using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Session;
 using Xunit;
@@ -11,29 +10,51 @@ public class SessionManagerTests
     private sealed class FakeSession : ISession
     {
         public long Id { get; init; }
-        
+
         public ConnectionState State => ConnectionState.Connected;
-        
+
         public ConnectionMetrics Metrics { get; } = new();
 
         public EndPoint? RemoteEndPoint => null;
 
+        public bool IsBackpressured { get; set; }
+
+        public SlowConsumerPolicy Policy { get; init; } = SlowConsumerPolicy.Wait;
+
         public IReadOnlySet<string> Groups => new HashSet<string>();
-        
+
         public List<byte[]> SentData { get; } = [];
 
         public ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
         {
+            if (Policy != SlowConsumerPolicy.Wait && IsBackpressured)
+            {
+                if (Policy == SlowConsumerPolicy.Disconnect)
+                {
+                    _ = CloseAsync(cancellationToken);
+                }
+
+                return ValueTask.CompletedTask;
+            }
+
             SentData.Add(data.ToArray());
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask CloseAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
-        
+        public bool Closed { get; private set; }
+
+        public ValueTask CloseAsync(CancellationToken cancellationToken = default)
+        {
+            Closed = true;
+            return ValueTask.CompletedTask;
+        }
+
+        public void Abort() => Closed = true;
+
         public void JoinGroup(string group) { }
-        
+
         public void LeaveGroup(string group) { }
-        
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -90,5 +111,73 @@ public class SessionManagerTests
 
         Assert.Empty(s1.SentData);
         Assert.Single(s2.SentData);
+    }
+
+    [Fact]
+    public async Task Broadcast_DropPolicy_SkipsBackpressuredSession()
+    {
+        SessionManager mgr = new SessionManager();
+        FakeSession fast = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Drop };
+        FakeSession slow = new FakeSession { Id = 2, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
+        mgr.TryAdd(fast);
+        mgr.TryAdd(slow);
+
+        await mgr.BroadcastAsync(new byte[] { 42 });
+
+        Assert.Single(fast.SentData);
+        Assert.Empty(slow.SentData);
+    }
+
+    [Fact]
+    public async Task Broadcast_DisconnectPolicy_ClosesBackpressuredSession()
+    {
+        SessionManager mgr = new SessionManager();
+        FakeSession fast = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect };
+        FakeSession slow = new FakeSession { Id = 2, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
+        mgr.TryAdd(fast);
+        mgr.TryAdd(slow);
+
+        await mgr.BroadcastAsync(new byte[] { 42 });
+
+        Assert.Single(fast.SentData);
+        Assert.Empty(slow.SentData);
+        Assert.True(slow.Closed);
+    }
+
+    [Fact]
+    public async Task Broadcast_WaitPolicy_SendsToBackpressuredSession()
+    {
+        SessionManager mgr = new SessionManager();
+        FakeSession fast = new FakeSession { Id = 1 };
+        FakeSession slow = new FakeSession { Id = 2, IsBackpressured = true };
+        mgr.TryAdd(fast);
+        mgr.TryAdd(slow);
+
+        await mgr.BroadcastAsync(new byte[] { 42 });
+
+        Assert.Single(fast.SentData);
+        Assert.Single(slow.SentData);
+    }
+
+    [Fact]
+    public async Task SendAsync_DropPolicy_SkipsWhenBackpressured()
+    {
+        FakeSession session = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
+
+        await session.SendAsync(new byte[] { 42 });
+
+        Assert.Empty(session.SentData);
+        Assert.False(session.Closed);
+    }
+
+    [Fact]
+    public async Task SendAsync_DisconnectPolicy_ClosesWhenBackpressured()
+    {
+        FakeSession session = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
+
+        await session.SendAsync(new byte[] { 42 });
+
+        Assert.Empty(session.SentData);
+        Assert.True(session.Closed);
     }
 }
