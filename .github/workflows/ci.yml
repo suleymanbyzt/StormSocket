@@ -2,16 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, feature/ci-pipeline]
   pull_request:
     branches: [master]
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  CI_TFM: net6.0;net7.0;net8.0;net9.0
 
 jobs:
   build-and-test:
@@ -24,15 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: fast-actions/setup-dotnet@v1
-        with:
-          dotnet-version: |
-            6.0.x
-            7.0.x
-            8.0.x
-            9.0.x
-
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -41,13 +29,13 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet restore
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -warnaserror -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet build --no-restore --configuration Release -warnaserror
 
       - name: Test
         run: dotnet test --no-build --configuration Release
 
       - name: Pack
-        run: dotnet pack --no-build --configuration Release -p:TargetFrameworks=${{ env.CI_TFM }}
+        run: dotnet pack --no-build --configuration Release
