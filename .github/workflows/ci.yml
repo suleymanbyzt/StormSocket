@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
@@ -25,11 +29,21 @@ jobs:
             8.0.x
             9.0.x
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Restore
         run: dotnet restore
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build --no-restore --configuration Release -warnaserror
 
       - name: Test
         run: dotnet test --no-build --configuration Release
+
+      - name: Pack
+        run: dotnet pack --no-build --configuration Release
