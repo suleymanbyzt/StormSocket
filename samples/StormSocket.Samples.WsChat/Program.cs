@@ -1,5 +1,4 @@
 using System.Net;
-using System.Threading.Tasks;
 using StormSocket.Server;
 
 StormWebSocketServer ws = new StormWebSocketServer(new ServerOptions

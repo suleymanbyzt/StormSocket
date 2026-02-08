@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using StormSocket.Session;
 
 namespace StormSocket.Middleware;
@@ -20,10 +19,20 @@ public sealed class MiddlewarePipeline
         }
     }
 
-    public async ValueTask<ReadOnlyMemory<byte>> OnDataReceivedAsync(ISession session, ReadOnlyMemory<byte> data)
+    public ValueTask<ReadOnlyMemory<byte>> OnDataReceivedAsync(ISession session, ReadOnlyMemory<byte> data)
+    {
+        if (_middlewares.Count == 0)
+        {
+            return new ValueTask<ReadOnlyMemory<byte>>(data);
+        }
+
+        return OnDataReceivedSlowAsync(session, data);
+    }
+
+    private async ValueTask<ReadOnlyMemory<byte>> OnDataReceivedSlowAsync(ISession session, ReadOnlyMemory<byte> data)
     {
         ReadOnlyMemory<byte> current = data;
-        
+
         for (int i = 0; i < _middlewares.Count; i++)
         {
             current = await _middlewares[i].OnDataReceivedAsync(session, current).ConfigureAwait(false);
@@ -32,7 +41,7 @@ public sealed class MiddlewarePipeline
                 break;
             }
         }
-        
+
         return current;
     }
 

@@ -1,5 +1,4 @@
 using System.Net;
-using System.Threading.Tasks;
 using StormSocket.Core;
 using StormSocket.Transport;
 
@@ -9,14 +8,17 @@ public sealed class TcpSession : ISession
 {
     private readonly PipeConnection _connection;
     private readonly ITransport _transport;
+    private readonly SlowConsumerPolicy _policy;
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
     private volatile ConnectionState _state;
+    private int _closeGuard;
 
     public long Id { get; }
     public ConnectionState State => _state;
     public ConnectionMetrics Metrics { get; } = new();
     public EndPoint? RemoteEndPoint { get; }
+    public bool IsBackpressured => _connection.IsBackpressured;
 
     public IReadOnlySet<string> Groups
     {
@@ -29,34 +31,60 @@ public sealed class TcpSession : ISession
         }
     }
 
-    internal ITransport Transport => _transport;
-    internal PipeConnection Connection => _connection;
-
-    internal TcpSession(long id, ITransport transport, PipeConnection connection, EndPoint? remoteEndPoint)
+    internal TcpSession(long id, ITransport transport, PipeConnection connection, EndPoint? remoteEndPoint,
+        SlowConsumerPolicy policy = SlowConsumerPolicy.Wait)
     {
         Id = id;
         _transport = transport;
         _connection = connection;
         RemoteEndPoint = remoteEndPoint;
+        _policy = policy;
         _state = ConnectionState.Connected;
+
+        if (policy == SlowConsumerPolicy.Disconnect)
+        {
+            _connection.OnBackpressureDetected = () => _ = CloseAsync();
+        }
     }
 
     internal void SetState(ConnectionState state) => _state = state;
 
-    public async ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+    public ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
         if (_state is not ConnectionState.Connected)
         {
-            return;
+            return ValueTask.CompletedTask;
         }
 
-        await _connection.SendAsync(data, cancellationToken).ConfigureAwait(false);
-        Metrics.AddBytesSent(data.Length);
+        if (_policy != SlowConsumerPolicy.Wait && _connection.IsBackpressured)
+        {
+            if (_policy == SlowConsumerPolicy.Disconnect)
+            {
+                _ = CloseAsync(cancellationToken);
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        ValueTask sendTask = _connection.SendAsync(data, cancellationToken);
+        if (sendTask.IsCompletedSuccessfully)
+        {
+            Metrics.AddBytesSent(data.Length);
+            return ValueTask.CompletedTask;
+        }
+
+        return SendAsyncSlow(sendTask, data.Length);
+    }
+
+    private async ValueTask SendAsyncSlow(ValueTask sendTask, int byteCount)
+    {
+        await sendTask.ConfigureAwait(false);
+        Metrics.AddBytesSent(byteCount);
     }
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
     {
-        if (_state is ConnectionState.Closing or ConnectionState.Closed)
+        if (Interlocked.CompareExchange(ref _closeGuard, 1, 0) != 0)
         {
             return;
         }
@@ -64,6 +92,17 @@ public sealed class TcpSession : ISession
         _state = ConnectionState.Closing;
         await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
         _state = ConnectionState.Closed;
+    }
+
+    public void Abort()
+    {
+        if (Interlocked.CompareExchange(ref _closeGuard, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _state = ConnectionState.Closing;
+        _ = _transport.CloseAsync();
     }
 
     public void JoinGroup(string group)

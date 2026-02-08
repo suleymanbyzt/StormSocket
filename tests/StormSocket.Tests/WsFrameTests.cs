@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.IO.Pipelines;
-using System.Threading.Tasks;
 using StormSocket.WebSocket;
 using Xunit;
 

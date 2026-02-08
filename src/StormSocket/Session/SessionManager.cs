@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Threading.Tasks;
 
 namespace StormSocket.Session;
 
@@ -32,9 +31,14 @@ public sealed class SessionManager
         return result;
     }
 
-    /// <summary>Sends data to all sessions. Best-effort: individual failures are silently ignored.</summary>
+    /// <summary>
+    /// Sends data to all sessions concurrently. Best-effort: individual failures are silently ignored.
+    /// Each session applies its own SlowConsumerPolicy (Drop/Disconnect/Wait) automatically.
+    /// Concurrent dispatch ensures one slow client cannot block delivery to others.
+    /// </summary>
     public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, long? excludeId = null, CancellationToken cancellationToken = default)
     {
+        List<ValueTask> tasks = [];
         foreach (ISession session in _sessions.Values)
         {
             if (session.Id == excludeId)
@@ -42,9 +46,14 @@ public sealed class SessionManager
                 continue;
             }
 
+            tasks.Add(session.SendAsync(data, cancellationToken));
+        }
+
+        foreach (ValueTask task in tasks)
+        {
             try
             {
-                await session.SendAsync(data, cancellationToken).ConfigureAwait(false);
+                await task.ConfigureAwait(false);
             }
             catch
             {

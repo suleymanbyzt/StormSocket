@@ -29,6 +29,12 @@ public interface ISession : IAsyncDisposable
     EndPoint? RemoteEndPoint { get; }
 
     /// <summary>
+    /// True when the session's send buffer is full and writes would block.
+    /// Used by broadcast to detect slow consumers.
+    /// </summary>
+    bool IsBackpressured { get; }
+
+    /// <summary>
     /// Set of group names this session belongs to.
     /// </summary>
     IReadOnlySet<string> Groups { get; }
@@ -39,9 +45,18 @@ public interface ISession : IAsyncDisposable
     ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gracefully closes the connection.
+    /// Gracefully closes the connection. For WebSocket sessions, sends a Close frame first.
+    /// If the client is slow, this may take time while the Close frame is flushed.
+    /// Use <see cref="Abort"/> for immediate termination.
     /// </summary>
     ValueTask CloseAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Immediately terminates the connection without sending a Close frame.
+    /// All pending reads and writes are cancelled, and the socket is closed.
+    /// Use this for slow consumers that can't even process a graceful Close.
+    /// </summary>
+    void Abort();
 
     /// <summary>
     /// Adds this session to a named group for broadcast.

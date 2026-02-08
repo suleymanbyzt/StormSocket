@@ -21,7 +21,7 @@ public sealed class RawFramer : IMessageFramer
             return false;
         }
 
-        message = buffer.ToArray();
+        message = buffer.IsSingleSegment ? buffer.First : buffer.ToArray();
         buffer = buffer.Slice(buffer.End);
         return true;
     }
