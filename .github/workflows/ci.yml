@@ -16,27 +16,10 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            dotnet: |
-              6.0.x
-              7.0.x
-              8.0.x
-              9.0.x
-            tfm: net6.0%3Bnet7.0%3Bnet8.0%3Bnet9.0
-          - os: windows-latest
-            dotnet: |
-              8.0.x
-              9.0.x
-            tfm: net8.0%3Bnet9.0
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ matrix.dotnet }}
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -46,13 +29,13 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore -p:TargetFrameworks=${{ matrix.tfm }}
+        run: dotnet restore
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -warnaserror -p:TargetFrameworks=${{ matrix.tfm }}
+        run: dotnet build --no-restore --configuration Release -warnaserror
 
       - name: Test
         run: dotnet test --no-build --configuration Release
 
       - name: Pack
-        run: dotnet pack --no-build --configuration Release -p:TargetFrameworks=${{ matrix.tfm }}
+        run: dotnet pack --no-build --configuration Release
