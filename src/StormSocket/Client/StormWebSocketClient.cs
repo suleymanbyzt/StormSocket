@@ -99,29 +99,43 @@ public class StormWebSocketClient : IAsyncDisposable
         string host = uri.Host;
         int port = uri.Port > 0 ? uri.Port : (useSsl ? 443 : 80);
 
-        Socket socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
-        socket.DualMode = true;
-        if (_options.NoDelay)
-        {
-            socket.NoDelay = true;
-        }
-
-        if (_options.KeepAlive)
-        {
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-        }
-
         using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(_options.ConnectTimeout);
 
-        try
+        IPAddress[] addresses = await Dns.GetHostAddressesAsync(host, timeoutCts.Token).ConfigureAwait(false);
+
+        Socket? socket = null;
+        Exception? lastEx = null;
+
+        foreach (IPAddress address in addresses)
         {
-            await socket.ConnectAsync(host, port, timeoutCts.Token).ConfigureAwait(false);
+            Socket attempt = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            if (_options.NoDelay)
+            {
+                attempt.NoDelay = true;
+            }
+
+            if (_options.KeepAlive)
+            {
+                attempt.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            }
+
+            try
+            {
+                await attempt.ConnectAsync(new IPEndPoint(address, port), timeoutCts.Token).ConfigureAwait(false);
+                socket = attempt;
+                break;
+            }
+            catch (Exception ex)
+            {
+                lastEx = ex;
+                attempt.Dispose();
+            }
         }
-        catch
+
+        if (socket is null)
         {
-            socket.Dispose();
-            throw;
+            throw lastEx ?? new SocketException((int)SocketError.HostUnreachable);
         }
 
         RemoteEndPoint = socket.RemoteEndPoint;

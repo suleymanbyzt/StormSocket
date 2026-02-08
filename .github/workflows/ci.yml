@@ -21,25 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET 6.0
+      - name: Setup .NET SDKs and runtimes
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 6.0.x
-
-      - name: Setup .NET 7.0
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 7.0.x
-
-      - name: Setup .NET 8.0
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Setup .NET 9.0
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.0.x
+          dotnet-version: |
+            6.0.x
+            7.0.x
+            8.0.x
+            9.0.x
+          dotnet-quality: ga
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -49,13 +39,13 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -warnaserror
+        run: dotnet build --no-restore --configuration Release -warnaserror /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
 
       - name: Test
         run: dotnet test --no-build --configuration Release
 
       - name: Pack
-        run: dotnet pack --no-build --configuration Release
+        run: dotnet pack --no-build --configuration Release /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
