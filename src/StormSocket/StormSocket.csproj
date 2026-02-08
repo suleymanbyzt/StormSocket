@@ -7,10 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>StormSocket</RootNamespace>
     <AssemblyName>StormSocket</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>CS1591;CS1573</NoWarn>
 
     <!-- NuGet Package -->
     <PackageId>StormSocket</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Authors>suleymanbyzt</Authors>
     <Description>Modern, high-performance, event-based TCP/WebSocket/SSL library for .NET built on System.IO.Pipelines. Zero subclassing — just subscribe to events and go.</Description>
     <PackageTags>tcp;websocket;ssl;tls;server;client;socket;networking;high-performance;pipelines</PackageTags>

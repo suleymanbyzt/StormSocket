@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StormSocket.Events;
+using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
 using StormSocket.Session;
 using StormSocket.Samples.WsServer.Models;
@@ -18,11 +19,16 @@ public sealed class MessageHandler
     private readonly UserManager _users;
     private readonly BroadcastHelper _broadcast;
 
-    public MessageHandler(StormWebSocketServer server, UserManager users, BroadcastHelper broadcast)
+    public MessageHandler(StormWebSocketServer server, UserManager users, BroadcastHelper broadcast, RateLimitMiddleware? rateLimiter = null)
     {
         _server = server;
         _users = users;
         _broadcast = broadcast;
+
+        if (rateLimiter is not null)
+        {
+            rateLimiter.OnExceeded += OnRateLimitExceeded;
+        }
     }
 
     public void Register()
@@ -75,15 +81,33 @@ public sealed class MessageHandler
 
             switch (type)
             {
-                case "setName":   await OnSetName(session, user, root); break;
-                case "chat":      await OnChat(session, user, root); break;
-                case "whisper":   await OnWhisper(session, user, root); break;
-                case "join":      await OnJoinRoom(session, user, root); break;
-                case "leave":     await OnLeaveRoom(session, user, root); break;
-                case "roomMsg":   await OnRoomMessage(session, user, root); break;
-                case "list":      await OnListUsers(session); break;
-                case "rooms":     await OnListRooms(session); break;
-                case "myInfo":    await OnMyInfo(session, user); break;
+                case "setName":
+                    await OnSetName(session, user, root); break;
+                
+                case "chat":
+                    await OnChat(session, user, root); break;
+                
+                case "whisper":
+                    await OnWhisper(session, user, root); break;
+                
+                case "join":
+                    await OnJoinRoom(session, user, root); break;
+                
+                case "leave":
+                    await OnLeaveRoom(session, user, root); break;
+                
+                case "roomMsg":
+                    await OnRoomMessage(session, user, root); break;
+                
+                case "list":
+                    await OnListUsers(session); break;
+                
+                case "rooms":
+                    await OnListRooms(session); break;
+                
+                case "myInfo":
+                    await OnMyInfo(session, user); break;
+                
                 default:
                     await _broadcast.SendAsync(session, new { type = "error", message = $"Unknown: {type}" });
                     break;
@@ -255,9 +279,17 @@ public sealed class MessageHandler
         });
     }
 
-    private async ValueTask OnError(ISession? session, Exception ex)
+    private async ValueTask OnRateLimitExceeded(ISession session)
+    {
+        ConnectedUser? user = _users.Get(session.Id);
+        string name = user?.Name ?? $"#{session.Id}";
+        Console.WriteLine($"[RateLimit] {name} ({session.RemoteEndPoint}) exceeded limit");
+        await _broadcast.SystemMessageAsync($"{name} was disconnected (rate limit exceeded)");
+    }
+
+    private ValueTask OnError(ISession? session, Exception ex)
     {
         Console.WriteLine($"  [ERROR] #{session?.Id}: {ex.Message}");
-        await ValueTask.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

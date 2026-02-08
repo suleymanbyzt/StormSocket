@@ -42,16 +42,65 @@ public class StormWebSocketServer : IAsyncDisposable
     /// <summary>Manages named groups for targeted broadcast.</summary>
     public SessionGroup Groups { get; } = new();
 
-    /// <summary>Fired when a WebSocket client completes the upgrade handshake.</summary>
+    /// <summary>
+    /// Fired when a WebSocket client completes the upgrade handshake.
+    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnConnected += async (session) =>
+    /// {
+    ///     Console.WriteLine($"#{session.Id} connected from {session.RemoteEndPoint}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event WsConnectedHandler? OnConnected;
 
-    /// <summary>Fired when a WebSocket client disconnects.</summary>
+    /// <summary>
+    /// Fired when a WebSocket client disconnects (gracefully or not).
+    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnDisconnected += async (session) =>
+    /// {
+    ///     Console.WriteLine($"#{session.Id} disconnected — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event WsDisconnectedHandler? OnDisconnected;
 
-    /// <summary>Fired when a complete text or binary message is received.</summary>
+    /// <summary>
+    /// Fired when a complete text or binary WebSocket message is received.
+    /// Use <see cref="WsMessage.IsText"/> to check the frame type and <see cref="WsMessage.Text"/> for decoded string content.
+    /// <para><b>Signature:</b> <c>async (ISession session, WsMessage msg) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnMessageReceived += async (session, msg) =>
+    /// {
+    ///     if (msg.IsText)
+    ///         Console.WriteLine($"#{session.Id}: {msg.Text}");
+    ///     else
+    ///         Console.WriteLine($"#{session.Id}: {msg.Data.Length} bytes");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event WsMessageReceivedHandler? OnMessageReceived;
 
-    /// <summary>Fired when an error occurs during connection handling.</summary>
+    /// <summary>
+    /// Fired when an error occurs during connection handling.
+    /// Session may be null if the error occurs before session creation (e.g. during handshake).
+    /// <para><b>Signature:</b> <c>async (ISession? session, Exception ex) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnError += async (session, ex) =>
+    /// {
+    ///     Console.WriteLine($"Error on #{session?.Id}: {ex.Message}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event ErrorHandler? OnError;
 
     public StormWebSocketServer(ServerOptions options)

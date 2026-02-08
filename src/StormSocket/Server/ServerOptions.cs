@@ -40,16 +40,21 @@ public sealed class ServerOptions
 
     /// <summary>
     /// Maximum bytes waiting to be sent before backpressure kicks in.
-    /// When this limit is reached, send operations will await until the
-    /// socket drains the pending data. Prevents memory exhaustion from slow consumers.
-    /// Default: 1 MB. Set to 0 for unlimited (not recommended).
+    /// When this limit is reached, the behavior depends on <see cref="SlowConsumerPolicy"/>:
+    /// <list type="bullet">
+    /// <item><b>Wait</b> (default): Send operations block until the socket drains pending data.</item>
+    /// <item><b>Drop</b>: Messages to backpressured sessions are silently discarded.</item>
+    /// <item><b>Disconnect</b>: Backpressured sessions are immediately terminated via <c>Abort()</c>.</item>
+    /// </list>
+    /// Default: 1 MB. Set to 0 for unlimited (not recommended for production).
     /// </summary>
     public long MaxPendingSendBytes { get; init; } = 1024 * 1024;
 
     /// <summary>
-    /// Maximum bytes received but not yet processed before pausing socket reads.
-    /// Prevents memory exhaustion when message processing is slower than the network.
-    /// Default: 1 MB. Set to 0 for unlimited (not recommended).
+    /// How much unprocessed incoming data to buffer before telling the client to slow down.
+    /// If your <c>OnDataReceived</c> handler is slower than the client's send rate,
+    /// this limit prevents memory from growing unboundedly — the OS pauses the sender via TCP flow control.
+    /// Default: 1 MB. Set to 0 for unlimited (not recommended for production).
     /// </summary>
     public long MaxPendingReceiveBytes { get; init; } = 1024 * 1024;
 
@@ -66,8 +71,13 @@ public sealed class ServerOptions
     public int MaxConnections { get; init; } = 0;
 
     /// <summary>
-    /// Determines behavior when a session's send buffer is full during broadcast.
-    /// Wait = block (default), Drop = skip slow sessions, Disconnect = close slow sessions.
+    /// Determines behavior when a session's send buffer reaches <see cref="MaxPendingSendBytes"/>.
+    /// Applies to both broadcast and individual <c>SendAsync</c> calls.
+    /// <list type="bullet">
+    /// <item><b>Wait</b> (default): Awaits until the socket drains. Safe but a slow client can stall the caller.</item>
+    /// <item><b>Drop</b>: Silently discards the message. Best for real-time data (chat, game state, tickers).</item>
+    /// <item><b>Disconnect</b>: Calls <c>Abort()</c> to immediately terminate the session. Best for critical feeds where all clients must keep up.</item>
+    /// </list>
     /// </summary>
     public SlowConsumerPolicy SlowConsumerPolicy { get; init; } = SlowConsumerPolicy.Wait;
 

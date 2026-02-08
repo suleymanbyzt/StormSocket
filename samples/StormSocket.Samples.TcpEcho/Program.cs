@@ -1,29 +1,37 @@
 using System.Net;
+using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
 
 StormTcpServer server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 5000),
     NoDelay = true,
-    WebSocket = new WebSocketOptions()
-    {
-        AutoPong = true,
-        PingInterval = TimeSpan.FromSeconds(15),
-        MaxFrameSize = 1024 * 1024, // 1 MB
-        MaxMissedPongs = 2
-    }
 });
+
+// Rate limiting: max 100 messages per 10 seconds per session
+RateLimitMiddleware rateLimiter = new(new RateLimitOptions
+{
+    Window = TimeSpan.FromSeconds(10),
+    MaxMessages = 100,
+    Scope = RateLimitScope.Session,
+    ExceededAction = RateLimitAction.Disconnect,
+});
+
+rateLimiter.OnExceeded += async session =>
+{
+    Console.WriteLine($"[{session.Id}] Rate limit exceeded — disconnecting");
+};
+
+server.UseMiddleware(rateLimiter);
 
 server.OnConnected += async session =>
 {
-    Console.WriteLine($"[{session.Id}] Connected");
-    await ValueTask.CompletedTask;
+    Console.WriteLine($"[{session.Id}] Connected ({server.Sessions.Count} online)");
 };
 
 server.OnDisconnected += async session =>
 {
     Console.WriteLine($"[{session.Id}] Disconnected (sent={session.Metrics.BytesSent}, recv={session.Metrics.BytesReceived})");
-    await ValueTask.CompletedTask;
 };
 
 server.OnDataReceived += async (session, data) =>
@@ -35,7 +43,6 @@ server.OnDataReceived += async (session, data) =>
 server.OnError += async (session, ex) =>
 {
     Console.WriteLine($"[{session?.Id}] Error: {ex.Message}");
-    await ValueTask.CompletedTask;
 };
 
 await server.StartAsync();

@@ -34,16 +34,63 @@ public class StormTcpServer : IAsyncDisposable
     /// <summary>Manages named groups for targeted broadcast.</summary>
     public SessionGroup Groups { get; } = new();
 
-    /// <summary>Fired when a new client connects and handshake completes.</summary>
+    /// <summary>
+    /// Fired when a new client connects and handshake (SSL if configured) completes.
+    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnConnected += async (session) =>
+    /// {
+    ///     Console.WriteLine($"#{session.Id} connected from {session.RemoteEndPoint}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event SessionConnectedHandler? OnConnected;
 
-    /// <summary>Fired when a client disconnects (gracefully or not).</summary>
+    /// <summary>
+    /// Fired when a client disconnects (gracefully or not).
+    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnDisconnected += async (session) =>
+    /// {
+    ///     Console.WriteLine($"#{session.Id} disconnected — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event SessionDisconnectedHandler? OnDisconnected;
 
-    /// <summary>Fired when data (or a framed message) is received from a client.</summary>
+    /// <summary>
+    /// Fired when data (or a framed message) is received from a client.
+    /// If a <see cref="ServerOptions.Framer"/> is configured, each invocation contains one complete message.
+    /// <para><b>Signature:</b> <c>async (ISession session, ReadOnlyMemory&lt;byte&gt; data) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnDataReceived += async (session, data) =>
+    /// {
+    ///     Console.WriteLine($"#{session.Id}: {data.Length} bytes");
+    ///     await session.SendAsync(data); // echo
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event DataReceivedHandler? OnDataReceived;
 
-    /// <summary>Fired when an error occurs during connection handling.</summary>
+    /// <summary>
+    /// Fired when an error occurs during connection handling.
+    /// Session may be null if the error occurs before session creation.
+    /// <para><b>Signature:</b> <c>async (ISession? session, Exception ex) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnError += async (session, ex) =>
+    /// {
+    ///     Console.WriteLine($"Error on #{session?.Id}: {ex.Message}");
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
     public event ErrorHandler? OnError;
 
     public StormTcpServer(ServerOptions options)

@@ -1,5 +1,6 @@
 using System.Net;
 using StormSocket.Core;
+using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
 using StormSocket.Samples.WsServer.Handlers;
 using StormSocket.Samples.WsServer.Middleware;
@@ -22,7 +23,7 @@ StormWebSocketServer server = new(new ServerOptions
         MaxFrameSize = 64 * 1024,
         AutoPong = true,
     },
-    SlowConsumerPolicy = SlowConsumerPolicy.Disconnect,
+    SlowConsumerPolicy = SlowConsumerPolicy.Drop,
     DualMode = true,
     MaxConnections = 10, // set to 0 for unlimited connections
     KeepAlive = false
@@ -32,9 +33,19 @@ UserManager users = new();
 BroadcastHelper broadcast = new(server);
 TickerService ticker = new(server, users, interval: TimeSpan.FromSeconds(1));
 
+// Rate limiting: max 50 messages per 5 seconds per IP
+RateLimitMiddleware rateLimiter = new(new RateLimitOptions
+{
+    Window = TimeSpan.FromSeconds(5),
+    MaxMessages = 5,
+    Scope = RateLimitScope.Session,
+    ExceededAction = RateLimitAction.Disconnect,
+});
+
+server.UseMiddleware(rateLimiter);
 server.UseMiddleware(new LoggingMiddleware());
 
-MessageHandler handler = new(server, users, broadcast);
+MessageHandler handler = new(server, users, broadcast, rateLimiter);
 handler.Register();
 
 await server.StartAsync();

@@ -32,6 +32,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
   - [Middleware Pipeline](#middleware-pipeline)
   - [WebSocket Heartbeat & Dead Connection Detection](#websocket-heartbeat--dead-connection-detection)
   - [Slow Consumer Detection](#slow-consumer-detection)
+  - [Rate Limiting](#rate-limiting)
   - [Closing Connections: CloseAsync vs Abort](#closing-connections-closeasync-vs-abort)
   - [Backpressure & Buffer Limits](#backpressure--buffer-limits)
   - [Full WebSocket Server with Admin Console](#full-websocket-server-with-admin-console)
@@ -69,6 +70,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Automatic heartbeat** with configurable ping interval and dead connection detection (missed pong counting)
 - **Session management** - track, query, broadcast, and kick connections
 - **Groups/Rooms** - named groups for targeted broadcast (chat rooms, game lobbies, etc.)
+- **Rate limiting middleware** - opt-in per-session or per-IP rate limiting with configurable window, action (disconnect/drop), and exceeded event
 - **Middleware pipeline** - intercept connect, disconnect, data received, data sending, and errors (works on both server and client)
 - **Backpressure & buffer limits** - configurable send/receive pipe limits prevent memory exhaustion
 - **Slow consumer detection** - `SlowConsumerPolicy` per session: `Wait` (block), `Drop` (skip), or `Disconnect` (close). Applied to both broadcast and individual sends
@@ -640,6 +642,52 @@ var server = new StormTcpServer(new ServerOptions
     MaxConnections = 10_000, // 0 = unlimited (default)
 });
 ```
+
+## Rate Limiting
+
+Built-in opt-in middleware that limits incoming messages per client within a configurable time window. Protects the server from misbehaving or malicious clients.
+
+```csharp
+using StormSocket.Middleware.RateLimiting;
+
+var rateLimiter = new RateLimitMiddleware(new RateLimitOptions
+{
+    Window = TimeSpan.FromSeconds(10),   // Time window
+    MaxMessages = 500,                   // Max messages per window
+    Scope = RateLimitScope.Session,      // Per session (default) or per IP
+    ExceededAction = RateLimitAction.Disconnect, // Disconnect (default) or Drop
+});
+
+rateLimiter.OnExceeded += async (session) =>
+{
+    Console.WriteLine($"Rate limit exceeded: #{session.Id} ({session.RemoteEndPoint})");
+};
+
+server.UseMiddleware(rateLimiter);
+```
+
+| Option | Values | Description |
+|---|---|---|
+| `Window` | `TimeSpan` | Time window for counting messages (default: 1 second) |
+| `MaxMessages` | `int` | Max messages allowed within the window (default: 100) |
+| `Scope` | `Session`, `IpAddress` | Per-session counters (default) or shared per IP |
+| `ExceededAction` | `Disconnect`, `Drop` | Abort the connection (default) or silently drop the message |
+
+**Scope options:**
+
+- **`Session`** (default): Each session has its own independent counter. Safe and predictable.
+- **`IpAddress`**: All sessions from the same IP share a single counter. Useful against distributed abuse from a single source. Note: clients behind NAT share an IP, so set limits accordingly.
+
+**Action options:**
+
+- **`Disconnect`** (default): Calls `session.Abort()` to immediately terminate the connection. Best for untrusted clients.
+- **`Drop`**: Silently discards the message but keeps the connection open. Useful for trusted clients that occasionally burst.
+
+The `OnExceeded` event fires on every rate limit hit (regardless of action), so you can log, monitor, or send a warning before the action is taken.
+
+> **Note:** `Disconnect` uses `Abort()` (immediate TCP close) rather than `CloseAsync()` (graceful WebSocket Close frame). This is intentional — a client flooding the server may not process a Close frame, causing the same blocking issue that `Abort()` was designed to solve. If you need a more nuanced approach, use `Drop` action with the `OnExceeded` event to handle it yourself.
+
+> **Using .NET's built-in rate limiting?** The `IConnectionMiddleware` interface is your extension point — you can create your own middleware wrapping `System.Threading.RateLimiting` (TokenBucketRateLimiter, SlidingWindowRateLimiter, etc.) without any extra dependencies from StormSocket.
 
 ## Closing Connections: CloseAsync vs Abort
 
