@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, feature/ci-pipeline]
   pull_request:
     branches: [master]
 
@@ -27,7 +27,7 @@ jobs:
       - name: Setup .NET
         uses: fast-actions/setup-dotnet@v1
         with:
-          dotnet-version: |
+          sdk-version: |
             6.0.x
             7.0.x
             8.0.x
