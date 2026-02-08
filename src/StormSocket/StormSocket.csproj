@@ -24,7 +24,6 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="" />
-    <None Include="..\..\stormsocket.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>

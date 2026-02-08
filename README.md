@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="stormsocket.png" alt="StormSocket" width="256" />
+  <img src="assets/stormsocket.png" alt="StormSocket" width="256" />
 </p>
 
 <h1 align="center">StormSocket</h1>
