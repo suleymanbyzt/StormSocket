@@ -14,7 +14,20 @@
 
 Zero subclassing required. Subscribe to events, configure options, and go. Server and client included.
 
+## Why StormSocket?
+
+Most .NET networking libraries use raw byte arrays with manual buffer management, and force you to subclass a base session class. StormSocket takes a different approach:
+
+- **Pooled, allocation-free I/O** — `System.IO.Pipelines` manages buffer pools internally. Socket writes directly into the pipe's memory, your handler reads from the same buffer — no intermediate copies, no `new byte[]` per read, minimal GC pressure under load
+- **Backpressure that actually works** — each pipe has configurable size thresholds. When a consumer falls behind, writes pause automatically. The OS TCP window propagates this upstream to the sender. No unbounded memory growth, no OOM crashes
+- **Slow consumer isolation** — every session gets its own dedicated pipe pair (receive + send). During broadcast, each session's send runs concurrently. If one client's send buffer is full, `SlowConsumerPolicy` handles it per-session (`Drop` the message, `Disconnect` the client, or `Wait`) — the other 99,999 sessions are completely unaffected. See [Slow Consumer Detection](#slow-consumer-detection) for details
+- **Subscribe, don't subclass** — `server.OnDataReceived += handler`, no inheritance chains
+- **SSL is a config flag** — same server, add `SslOptions`, done. No separate `SslServer` class
+- **Middleware pipeline** — rate limiting, auth, logging as composable plugins
+- **Built-in pub/sub** — named groups for chat rooms, game lobbies, ticker feeds
+
 # Contents
+- [Why StormSocket?](#why-stormsocket)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Benchmarks](#benchmarks)
