@@ -10,6 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CI_TFM: net6.0;net7.0;net8.0;net9.0
+
 jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
@@ -21,15 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET SDKs and runtimes
-        uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: fast-actions/setup-dotnet@v1
         with:
           dotnet-version: |
             6.0.x
             7.0.x
             8.0.x
             9.0.x
-          dotnet-quality: ga
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -39,13 +41,13 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
+        run: dotnet restore -p:TargetFrameworks=${{ env.CI_TFM }}
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -warnaserror /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
+        run: dotnet build --no-restore --configuration Release -warnaserror -p:TargetFrameworks=${{ env.CI_TFM }}
 
       - name: Test
         run: dotnet test --no-build --configuration Release
 
       - name: Pack
-        run: dotnet pack --no-build --configuration Release /p:TargetFrameworks="net6.0;net7.0;net8.0;net9.0"
+        run: dotnet pack --no-build --configuration Release -p:TargetFrameworks=${{ env.CI_TFM }}
