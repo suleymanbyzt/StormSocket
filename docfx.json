@@ -1,0 +1,42 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": ["src/StormSocket/StormSocket.csproj"],
+          "src": "."
+        }
+      ],
+      "dest": "api",
+      "properties": {
+        "TargetFramework": "net9.0"
+      }
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["api/**.yml", "api/index.md"]
+      },
+      {
+        "files": ["docs/**.md", "docs/**/toc.yml", "toc.yml", "*.md"]
+      }
+    ],
+    "resource": [
+      {
+        "files": ["assets/**"]
+      }
+    ],
+    "output": "_site",
+    "globalMetadata": {
+      "_appTitle": "StormSocket",
+      "_appFooter": "StormSocket — High-performance TCP/WebSocket/SSL library for .NET",
+      "_enableSearch": true,
+      "_gitContribute": {
+        "repo": "https://github.com/suleymanbyzt/StormSocket",
+        "branch": "master"
+      }
+    },
+    "template": ["default", "modern"]
+  }
+}
