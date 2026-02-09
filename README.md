@@ -807,6 +807,7 @@ StormSocket WsServer running on ws://0.0.0.0:8080
 | `MaxMissedPongs` | `int` | `3` | Consecutive missed Pongs before closing |
 | `MaxFrameSize` | `int` | `1048576` | Maximum frame payload (bytes). Oversized frames trigger close with `MessageTooBig` |
 | `AutoPong` | `bool` | `true` | Automatically reply to client Ping frames |
+| `AllowedOrigins` | `IReadOnlyList<string>?` | `null` | Allowed origins for CSWSH protection (RFC 6455 #10.2). `null` = allow all |
 
 ## ClientOptions
 

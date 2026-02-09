@@ -31,4 +31,15 @@ public sealed class WebSocketOptions
     /// Default: true.
     /// </summary>
     public bool AutoPong { get; init; } = true;
+
+    /// <summary>
+    /// List of allowed origins for CSWSH protection (RFC 6455 10.2).
+    /// If empty or null, all origins are allowed (default, for non-browser use cases).
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// AllowedOrigins = ["https://myapp.com", "https://staging.myapp.com"]
+    /// </code>
+    /// </example>
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
 }

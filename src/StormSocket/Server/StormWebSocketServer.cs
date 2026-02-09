@@ -340,7 +340,7 @@ public class StormWebSocketServer : IAsyncDisposable
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out string? wsKey);
+            WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out string? wsKey, _wsOptions.AllowedOrigins);
 
             switch (upgradeResult)
             {

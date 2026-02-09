@@ -1,13 +1,29 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Server;
 
-StormWebSocketServer ws = new StormWebSocketServer(new ServerOptions
+StormWebSocketServer ws = new(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+    Backlog = 128,
+    NoDelay = false,
+    ReceiveBufferSize = 1024 * 64,
+    SendBufferSize = 1024 * 64,
+    MaxPendingReceiveBytes = 1024 * 1024,
+    MaxPendingSendBytes = 1024 * 1024,
+    Ssl = null,
     WebSocket = new WebSocketOptions
     {
-        PingInterval = TimeSpan.FromSeconds(30),
-    }
+        PingInterval = TimeSpan.FromSeconds(1),
+        MaxMissedPongs = 3,
+        MaxFrameSize = 64 * 1024,
+        AutoPong = true,
+        AllowedOrigins = null, // allow all origins
+    },
+    SlowConsumerPolicy = SlowConsumerPolicy.Wait,
+    DualMode = true,
+    MaxConnections = 10, // set to 0 for unlimited connections
+    KeepAlive = false,
 });
 
 ws.OnConnected += async session =>

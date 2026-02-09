@@ -22,11 +22,12 @@ StormWebSocketServer server = new(new ServerOptions
         MaxMissedPongs = 3,
         MaxFrameSize = 64 * 1024,
         AutoPong = true,
+        AllowedOrigins = null, // allow all origins
     },
     SlowConsumerPolicy = SlowConsumerPolicy.Drop,
     DualMode = true,
     MaxConnections = 10, // set to 0 for unlimited connections
-    KeepAlive = false
+    KeepAlive = false,
 });
 
 UserManager users = new();

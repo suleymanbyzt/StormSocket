@@ -117,4 +117,74 @@ public class WsUpgradeTests
         Assert.StartsWith("HTTP/1.1 400 Bad Request", responseStr);
         Assert.Contains("Sec-WebSocket-Version: 13", responseStr);
     }
+
+    #region Origin Validation (RFC 6455 10.2)
+
+    [Fact]
+    public void TryParseUpgradeRequest_NoAllowedOrigins_AllowsAny()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://evil.com\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        // No allowedOrigins = allow all
+        Assert.Equal(WsUpgradeResult.Success, WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out _));
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_OriginInAllowedList_Success()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://myapp.com\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        string[] allowedOrigins = ["https://myapp.com", "https://staging.myapp.com"];
+        Assert.Equal(WsUpgradeResult.Success, WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out _, allowedOrigins));
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_OriginNotInAllowedList_ReturnsForbidden()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://evil.com\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        string[] allowedOrigins = ["https://myapp.com"];
+        Assert.Equal(WsUpgradeResult.ForbiddenOrigin, WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out _, allowedOrigins));
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_NoOriginHeaderWithAllowedList_ReturnsForbidden()
+    {
+        // Non-browser clients may not send Origin header - should be rejected if allowedOrigins is set
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        string[] allowedOrigins = ["https://myapp.com"];
+        Assert.Equal(WsUpgradeResult.ForbiddenOrigin, WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out _, allowedOrigins));
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_OriginCaseInsensitive_Success()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: HTTPS://MYAPP.COM\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        string[] allowedOrigins = ["https://myapp.com"];
+        Assert.Equal(WsUpgradeResult.Success, WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out _, allowedOrigins));
+    }
+
+    [Fact]
+    public void BuildErrorResponse_ForbiddenOrigin_Returns403()
+    {
+        byte[] response = WsUpgradeHandler.BuildErrorResponse(WsUpgradeResult.ForbiddenOrigin);
+        string responseStr = Encoding.ASCII.GetString(response);
+
+        Assert.StartsWith("HTTP/1.1 403 Forbidden", responseStr);
+        Assert.Contains("Origin not allowed", responseStr);
+    }
+
+    #endregion
 }
