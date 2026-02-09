@@ -22,4 +22,7 @@ public enum WsUpgradeResult
     
     /// <summary>Invalid Sec-WebSocket-Version (must be 13).</summary>
     InvalidVersion,
+
+    /// <summary>Origin header not in allowed list (CSWSH protection, RFC 6455 10.2).</summary>
+    ForbiddenOrigin,
 }

@@ -14,9 +14,15 @@ public static class WsUpgradeHandler
 
     /// <summary>
     /// Parses and validates a WebSocket upgrade request per RFC 6455 4.2.1.
-    /// Validates: Upgrade, Connection, Sec-WebSocket-Version, and Sec-WebSocket-Key headers.
+    /// Validates: Upgrade, Connection, Sec-WebSocket-Version, Sec-WebSocket-Key, and optionally Origin headers.
     /// </summary>
-    public static WsUpgradeResult TryParseUpgradeRequest(ref ReadOnlySequence<byte> buffer, out string? wsKey)
+    /// <param name="buffer">The request buffer.</param>
+    /// <param name="wsKey">The extracted Sec-WebSocket-Key.</param>
+    /// <param name="allowedOrigins">Optional list of allowed origins for CSWSH protection (RFC 6455 10.2).</param>
+    public static WsUpgradeResult TryParseUpgradeRequest(
+        ref ReadOnlySequence<byte> buffer,
+        out string? wsKey,
+        IReadOnlyList<string>? allowedOrigins = null)
     {
         wsKey = null;
 
@@ -59,6 +65,7 @@ public static class WsUpgradeHandler
         bool hasConnection = false;
         bool hasValidVersion = false;
         string? key = null;
+        string? origin = null;
 
         foreach (string line in lines)
         {
@@ -80,6 +87,10 @@ public static class WsUpgradeHandler
             else if (line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
             {
                 key = line.Substring("Sec-WebSocket-Key:".Length).Trim();
+            }
+            else if (line.StartsWith("Origin:", StringComparison.OrdinalIgnoreCase))
+            {
+                origin = line.Substring("Origin:".Length).Trim();
             }
         }
 
@@ -107,6 +118,26 @@ public static class WsUpgradeHandler
             return WsUpgradeResult.MissingKey;
         }
 
+        // RFC 6455 10.2: Origin validation for CSWSH protection
+        if (allowedOrigins is { Count: > 0 })
+        {
+            bool originAllowed = false;
+            foreach (string allowed in allowedOrigins)
+            {
+                if (string.Equals(origin, allowed, StringComparison.OrdinalIgnoreCase))
+                {
+                    originAllowed = true;
+                    break;
+                }
+            }
+
+            if (!originAllowed)
+            {
+                buffer = buffer.Slice(consumed);
+                return WsUpgradeResult.ForbiddenOrigin;
+            }
+        }
+
         wsKey = key;
         buffer = buffer.Slice(consumed);
         return WsUpgradeResult.Success;
@@ -120,12 +151,18 @@ public static class WsUpgradeHandler
     }
 
     /// <summary>
-    /// Builds an HTTP 400 Bad Request response for invalid upgrade requests.
-    /// For version mismatch, includes Sec-WebSocket-Version header per RFC 6455 4.4.
+    /// Builds an appropriate HTTP error response for invalid upgrade requests.
     /// </summary>
     public static byte[] BuildErrorResponse(WsUpgradeResult error)
     {
-        string reason = error switch
+        if (error == WsUpgradeResult.ForbiddenOrigin)
+        {
+            const string reason = "Origin not allowed";
+            string response = $"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
+            return Encoding.ASCII.GetBytes(response);
+        }
+
+        string errorReason = error switch
         {
             WsUpgradeResult.MissingUpgradeHeader => "Missing or invalid Upgrade header",
             WsUpgradeResult.MissingConnectionHeader => "Missing or invalid Connection header",
@@ -138,8 +175,8 @@ public static class WsUpgradeHandler
             ? "Sec-WebSocket-Version: 13\r\n"
             : "";
 
-        string response = $"HTTP/1.1 400 Bad Request\r\n{versionHeader}Content-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
-        return Encoding.ASCII.GetBytes(response);
+        string errorResponse = $"HTTP/1.1 400 Bad Request\r\n{versionHeader}Content-Type: text/plain\r\nContent-Length: {errorReason.Length}\r\nConnection: close\r\n\r\n{errorReason}";
+        return Encoding.ASCII.GetBytes(errorResponse);
     }
 
     private static string ComputeAcceptKey(string wsKey)
