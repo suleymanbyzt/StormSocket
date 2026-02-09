@@ -340,27 +340,41 @@ public class StormWebSocketServer : IAsyncDisposable
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            if (WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out string? wsKey))
+            WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out string? wsKey);
+
+            switch (upgradeResult)
             {
-                reader.AdvanceTo(buffer.Start, buffer.End);
+                case WsUpgradeResult.Success:
+                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    byte[] response = WsUpgradeHandler.BuildUpgradeResponse(wsKey!);
+                    await WriteResponseAsync(transport, response, ct).ConfigureAwait(false);
+                    return true;
 
-                byte[] response = WsUpgradeHandler.BuildUpgradeResponse(wsKey!);
-                Span<byte> span = transport.Output.GetSpan(response.Length);
-                response.CopyTo(span);
-                transport.Output.Advance(response.Length);
-                await transport.Output.FlushAsync(ct).ConfigureAwait(false);
-                return true;
-            }
+                case WsUpgradeResult.Incomplete:
+                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    if (result.IsCompleted)
+                    {
+                        return false;
+                    }
+                    continue;
 
-            reader.AdvanceTo(buffer.Start, buffer.End);
-
-            if (result.IsCompleted)
-            {
-                return false;
+                default:
+                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    byte[] errorResponse = WsUpgradeHandler.BuildErrorResponse(upgradeResult);
+                    await WriteResponseAsync(transport, errorResponse, ct).ConfigureAwait(false);
+                    return false;
             }
         }
 
         return false;
+    }
+
+    private static async ValueTask WriteResponseAsync(ITransport transport, byte[] response, CancellationToken ct)
+    {
+        Span<byte> span = transport.Output.GetSpan(response.Length);
+        response.CopyTo(span);
+        transport.Output.Advance(response.Length);
+        await transport.Output.FlushAsync(ct).ConfigureAwait(false);
     }
 
     private async Task ReadFrameLoopAsync(WebSocketSession session, ITransport transport, CancellationToken ct)

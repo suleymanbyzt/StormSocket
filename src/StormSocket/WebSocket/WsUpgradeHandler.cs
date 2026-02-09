@@ -12,59 +12,133 @@ public static class WsUpgradeHandler
     private static readonly byte[] CrLfCrLf = "\r\n\r\n"u8.ToArray();
     private const string WsGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-    public static bool TryParseUpgradeRequest(ref ReadOnlySequence<byte> buffer, out string? wsKey)
+    /// <summary>
+    /// Parses and validates a WebSocket upgrade request per RFC 6455 4.2.1.
+    /// Validates: Upgrade, Connection, Sec-WebSocket-Version, and Sec-WebSocket-Key headers.
+    /// </summary>
+    public static WsUpgradeResult TryParseUpgradeRequest(ref ReadOnlySequence<byte> buffer, out string? wsKey)
     {
         wsKey = null;
 
         Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
 
         ReadOnlySpan<byte> headerBytes;
+        SequencePosition consumed;
+
         if (buffer.IsSingleSegment)
         {
             ReadOnlySpan<byte> span = buffer.FirstSpan;
-            
+
             int idx = IndexOf(span, headerEndSpan);
             if (idx < 0)
             {
-                return false;
+                return WsUpgradeResult.Incomplete;
             }
-            
+
             headerBytes = span.Slice(0, idx);
-            buffer = buffer.Slice(idx + 4);
+            consumed = buffer.GetPosition(idx + 4);
         }
         else
         {
             byte[] arr = buffer.ToArray();
-            
+
             int idx = IndexOf(arr.AsSpan(), headerEndSpan);
             if (idx < 0)
             {
-                return false;
+                return WsUpgradeResult.Incomplete;
             }
-            
+
             headerBytes = arr.AsSpan(0, idx);
-            buffer = buffer.Slice(idx + 4);
+            consumed = buffer.GetPosition(idx + 4);
         }
 
         string headerStr = Encoding.ASCII.GetString(headerBytes);
         string[] lines = headerStr.Split("\r\n");
 
+        bool hasUpgrade = false;
+        bool hasConnection = false;
+        bool hasValidVersion = false;
+        string? key = null;
+
         foreach (string line in lines)
         {
-            if (line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith("Upgrade:", StringComparison.OrdinalIgnoreCase))
             {
-                wsKey = line.Substring("Sec-WebSocket-Key:".Length).Trim();
-                break;
+                string value = line.Substring("Upgrade:".Length).Trim();
+                hasUpgrade = value.Equals("websocket", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (line.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = line.Substring("Connection:".Length).Trim();
+                hasConnection = value.Contains("Upgrade", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (line.StartsWith("Sec-WebSocket-Version:", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = line.Substring("Sec-WebSocket-Version:".Length).Trim();
+                hasValidVersion = value == "13";
+            }
+            else if (line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
+            {
+                key = line.Substring("Sec-WebSocket-Key:".Length).Trim();
             }
         }
 
-        return wsKey != null;
+        if (!hasUpgrade)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingUpgradeHeader;
+        }
+
+        if (!hasConnection)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingConnectionHeader;
+        }
+
+        if (!hasValidVersion)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.InvalidVersion;
+        }
+
+        if (string.IsNullOrEmpty(key))
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingKey;
+        }
+
+        wsKey = key;
+        buffer = buffer.Slice(consumed);
+        return WsUpgradeResult.Success;
     }
 
     public static byte[] BuildUpgradeResponse(string wsKey)
     {
         string acceptKey = ComputeAcceptKey(wsKey);
         string response = $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acceptKey}\r\n\r\n";
+        return Encoding.ASCII.GetBytes(response);
+    }
+
+    /// <summary>
+    /// Builds an HTTP 400 Bad Request response for invalid upgrade requests.
+    /// For version mismatch, includes Sec-WebSocket-Version header per RFC 6455 4.4.
+    /// </summary>
+    public static byte[] BuildErrorResponse(WsUpgradeResult error)
+    {
+        string reason = error switch
+        {
+            WsUpgradeResult.MissingUpgradeHeader => "Missing or invalid Upgrade header",
+            WsUpgradeResult.MissingConnectionHeader => "Missing or invalid Connection header",
+            WsUpgradeResult.MissingKey => "Missing Sec-WebSocket-Key header",
+            WsUpgradeResult.InvalidVersion => "Unsupported WebSocket version",
+            _ => "Bad Request",
+        };
+
+        string versionHeader = error == WsUpgradeResult.InvalidVersion
+            ? "Sec-WebSocket-Version: 13\r\n"
+            : "";
+
+        string response = $"HTTP/1.1 400 Bad Request\r\n{versionHeader}Content-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
         return Encoding.ASCII.GetBytes(response);
     }
 
@@ -154,7 +228,6 @@ public static class WsUpgradeHandler
             return false;
         }
 
-        // note here.. refactor this
         string expectedAccept = ComputeAcceptKey(expectedWsKey);
         foreach (string line in lines)
         {
