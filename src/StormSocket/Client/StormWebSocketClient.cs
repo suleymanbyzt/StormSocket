@@ -19,7 +19,7 @@ namespace StormSocket.Client;
 /// <code>
 /// var ws = new StormWebSocketClient(new WsClientOptions {
 ///     Uri = new Uri("ws://localhost:8080/chat"),
-///     AutoReconnect = true,
+///     Reconnect = new() { Enabled = true },
 /// });
 /// ws.OnMessageReceived += async msg => Console.WriteLine(msg.Text);
 /// await ws.ConnectAsync();
@@ -76,7 +76,7 @@ public class StormWebSocketClient : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        if (_options.AutoReconnect)
+        if (_options.Reconnect.Enabled)
         {
             TaskCompletionSource firstConnect = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _runTask = ReconnectLoopAsync(firstConnect, _cts.Token);
@@ -110,12 +110,12 @@ public class StormWebSocketClient : IAsyncDisposable
         foreach (IPAddress address in addresses)
         {
             Socket attempt = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-            if (_options.NoDelay)
+            if (_options.Socket.NoDelay)
             {
                 attempt.NoDelay = true;
             }
 
-            if (_options.KeepAlive)
+            if (_options.Socket.KeepAlive)
             {
                 attempt.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             }
@@ -153,7 +153,7 @@ public class StormWebSocketClient : IAsyncDisposable
         }
         else
         {
-            transport = new TcpTransport(socket, _options.MaxPendingReceiveBytes, _options.MaxPendingSendBytes);
+            transport = new TcpTransport(socket, _options.Socket.MaxPendingReceiveBytes, _options.Socket.MaxPendingSendBytes);
         }
 
         await transport.HandshakeAsync(ct).ConfigureAwait(false);
@@ -173,13 +173,13 @@ public class StormWebSocketClient : IAsyncDisposable
         _transport = transport;
         _state = ConnectionState.Connected;
 
-        if (_options.PingInterval > TimeSpan.Zero)
+        if (_options.Heartbeat.PingInterval > TimeSpan.Zero)
         {
             _heartbeat = new WsHeartbeat(
                 sendPing: async ct2 => await WriteFrameAsync(
                     writer => WsFrameEncoder.WriteMaskedPing(writer), cancellationToken: ct2),
-                _options.PingInterval,
-                _options.MaxMissedPongs);
+                _options.Heartbeat.PingInterval,
+                _options.Heartbeat.MaxMissedPongs);
             _heartbeat.OnTimeout = async () => await DisconnectAsync().ConfigureAwait(false);
             _heartbeat.Start();
         }
@@ -322,7 +322,7 @@ public class StormWebSocketClient : IAsyncDisposable
 
                 break;
 
-            case WsOpCode.Ping when _options.AutoPong:
+            case WsOpCode.Ping when _options.Heartbeat.AutoPong:
                 ReadOnlyMemory<byte> pingPayload = frame.Payload;
                 await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedPong(writer, pingPayload.Span), cancellationToken: ct);
                 break;
@@ -487,21 +487,21 @@ public class StormWebSocketClient : IAsyncDisposable
             }
 
             attempt++;
-            if (_options.MaxReconnectAttempts > 0 && attempt > _options.MaxReconnectAttempts)
+            if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
             {
                 firstConnect?.TrySetException(new InvalidOperationException(
-                    $"Max reconnect attempts ({_options.MaxReconnectAttempts}) exceeded."));
+                    $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded."));
                 break;
             }
 
             if (OnReconnecting is not null)
             {
-                await OnReconnecting.Invoke(attempt, _options.ReconnectDelay).ConfigureAwait(false);
+                await OnReconnecting.Invoke(attempt, _options.Reconnect.Delay).ConfigureAwait(false);
             }
 
             try
             {
-                await Task.Delay(_options.ReconnectDelay, ct).ConfigureAwait(false);
+                await Task.Delay(_options.Reconnect.Delay, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

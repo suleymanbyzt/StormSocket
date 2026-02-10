@@ -14,7 +14,7 @@ namespace StormSocket.Client;
 /// <code>
 /// var client = new StormTcpClient(new ClientOptions {
 ///     EndPoint = new IPEndPoint(IPAddress.Loopback, 5000),
-///     AutoReconnect = true,
+///     Reconnect = new() { Enabled = true },
 /// });
 /// client.OnDataReceived += async data => Console.WriteLine($"Got {data.Length} bytes");
 /// await client.ConnectAsync();
@@ -70,7 +70,7 @@ public class StormTcpClient : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        if (_options.AutoReconnect)
+        if (_options.Reconnect.Enabled)
         {
             TaskCompletionSource firstConnect = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _runTask = ReconnectLoopAsync(firstConnect, _cts.Token);
@@ -90,12 +90,12 @@ public class StormTcpClient : IAsyncDisposable
 
         Socket socket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
-        if (_options.NoDelay)
+        if (_options.Socket.NoDelay)
         {
             socket.NoDelay = true;
         }
 
-        if (_options.KeepAlive)
+        if (_options.Socket.KeepAlive)
         {
             socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
         }
@@ -125,7 +125,7 @@ public class StormTcpClient : IAsyncDisposable
         }
         else
         {
-            transport = new TcpTransport(socket, _options.MaxPendingReceiveBytes, _options.MaxPendingSendBytes);
+            transport = new TcpTransport(socket, _options.Socket.MaxPendingReceiveBytes, _options.Socket.MaxPendingSendBytes);
         }
 
         await transport.HandshakeAsync(ct).ConfigureAwait(false);
@@ -246,21 +246,21 @@ public class StormTcpClient : IAsyncDisposable
             }
 
             attempt++;
-            if (_options.MaxReconnectAttempts > 0 && attempt > _options.MaxReconnectAttempts)
+            if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
             {
                 firstConnect?.TrySetException(new InvalidOperationException(
-                    $"Max reconnect attempts ({_options.MaxReconnectAttempts}) exceeded."));
+                    $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded."));
                 break;
             }
 
             if (OnReconnecting is not null)
             {
-                await OnReconnecting.Invoke(attempt, _options.ReconnectDelay).ConfigureAwait(false);
+                await OnReconnecting.Invoke(attempt, _options.Reconnect.Delay).ConfigureAwait(false);
             }
 
             try
             {
-                await Task.Delay(_options.ReconnectDelay, ct).ConfigureAwait(false);
+                await Task.Delay(_options.Reconnect.Delay, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

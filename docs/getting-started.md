@@ -25,7 +25,7 @@ using StormSocket.Server;
 StormTcpServer server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 5000),
-    NoDelay = true,
+    Socket = new StormSocket.Core.SocketTuningOptions { NoDelay = true },
 });
 
 server.OnConnected += async session =>
@@ -69,7 +69,10 @@ StormWebSocketServer ws = new StormWebSocketServer(new ServerOptions
     EndPoint = new IPEndPoint(IPAddress.Any, 8080),
     WebSocket = new WebSocketOptions
     {
-        PingInterval = TimeSpan.FromSeconds(30),
+        Heartbeat = new StormSocket.Core.HeartbeatOptions
+        {
+            PingInterval = TimeSpan.FromSeconds(30),
+        },
     }
 });
 

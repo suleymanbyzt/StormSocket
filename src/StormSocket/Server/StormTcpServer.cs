@@ -118,7 +118,7 @@ public class StormTcpServer : IAsyncDisposable
 
         _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-        if (_options.NoDelay)
+        if (_options.Socket.NoDelay)
         {
             _listenSocket.NoDelay = true;
         }
@@ -192,12 +192,12 @@ public class StormTcpServer : IAsyncDisposable
                 continue;
             }
 
-            if (_options.NoDelay)
+            if (_options.Socket.NoDelay)
             {
                 clientSocket.NoDelay = true;
             }
 
-            if (_options.KeepAlive)
+            if (_options.Socket.KeepAlive)
             {
                 clientSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             }
@@ -221,7 +221,7 @@ public class StormTcpServer : IAsyncDisposable
         }
         else
         {
-            transport = new TcpTransport(socket, _options.MaxPendingReceiveBytes, _options.MaxPendingSendBytes);
+            transport = new TcpTransport(socket, _options.Socket.MaxPendingReceiveBytes, _options.Socket.MaxPendingSendBytes);
         }
 
         TcpSession? session = null;

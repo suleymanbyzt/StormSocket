@@ -140,7 +140,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            PingInterval = TimeSpan.Zero, // disable for test
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // disable for test
         });
         client.OnMessageReceived += async msg =>
         {
@@ -173,7 +173,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            PingInterval = TimeSpan.Zero,
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         client.OnMessageReceived += async msg =>
         {
@@ -205,7 +205,7 @@ public class ClientTests
         StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            PingInterval = TimeSpan.Zero,
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         client.OnConnected += async () => connectedTcs.TrySetResult();
         client.OnDisconnected += async () => disconnectedTcs.TrySetResult();
@@ -318,8 +318,11 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                PingInterval = TimeSpan.FromMilliseconds(200),
-                MaxMissedPongs = 3,
+                Heartbeat = new StormSocket.Core.HeartbeatOptions
+                {
+                    PingInterval = TimeSpan.FromMilliseconds(200),
+                    MaxMissedPongs = 3,
+                },
             },
         });
         server.OnConnected += async session =>
@@ -334,7 +337,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            PingInterval = TimeSpan.Zero, // client doesn't send its own pings
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // client doesn't send its own pings
         });
         await client.ConnectAsync();
         await serverConnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -361,9 +364,12 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                PingInterval = TimeSpan.FromMilliseconds(100),
-                MaxMissedPongs = 2,
-                AutoPong = true,
+                Heartbeat = new StormSocket.Core.HeartbeatOptions
+                {
+                    PingInterval = TimeSpan.FromMilliseconds(100),
+                    MaxMissedPongs = 2,
+                    AutoPong = true,
+                },
             },
         });
         server.OnDisconnected += async _ => serverDisconnected.TrySetResult();
@@ -449,9 +455,9 @@ public class ClientTests
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            MaxPendingSendBytes = 1024,
+            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
             SlowConsumerPolicy = StormSocket.Core.SlowConsumerPolicy.Drop,
-            WebSocket = new WebSocketOptions { PingInterval = TimeSpan.Zero },
+            WebSocket = new WebSocketOptions { Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
         });
 
         TaskCompletionSource<WebSocketSession> connected = new();
@@ -513,9 +519,9 @@ public class ClientTests
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            MaxPendingSendBytes = 1024,
+            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
             SlowConsumerPolicy = StormSocket.Core.SlowConsumerPolicy.Disconnect,
-            WebSocket = new WebSocketOptions { PingInterval = TimeSpan.Zero },
+            WebSocket = new WebSocketOptions { Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
         });
 
         TaskCompletionSource<WebSocketSession> connected = new();
@@ -568,7 +574,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                PingInterval = TimeSpan.Zero,
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromMilliseconds(500),
             },
         });
@@ -610,7 +616,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                PingInterval = TimeSpan.Zero,
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromSeconds(5),
             },
         });
@@ -644,7 +650,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                PingInterval = TimeSpan.Zero,
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromMilliseconds(500),
             },
         });

@@ -1,11 +1,15 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
 
 StormTcpServer server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 5000),
-    NoDelay = true,
+    Socket = new SocketTuningOptions
+    {
+        NoDelay = true
+    },
 });
 
 // Rate limiting: max 100 messages per 10 seconds per session
