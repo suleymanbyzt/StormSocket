@@ -19,7 +19,7 @@ namespace StormSocket.Server;
 /// <code>
 /// var ws = new StormWebSocketServer(new ServerOptions {
 ///     EndPoint = new IPEndPoint(IPAddress.Any, 8080),
-///     WebSocket = new WebSocketOptions { PingInterval = TimeSpan.FromSeconds(15) },
+///     WebSocket = new WebSocketOptions { Heartbeat = new() { PingInterval = TimeSpan.FromSeconds(15) } },
 /// });
 /// ws.OnMessageReceived += async (session, msg) => await ws.BroadcastTextAsync(msg.Text);
 /// await ws.StartAsync();
@@ -152,7 +152,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
         _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-        if (_options.NoDelay)
+        if (_options.Socket.NoDelay)
         {
             _listenSocket.NoDelay = true;
         }
@@ -244,12 +244,12 @@ public class StormWebSocketServer : IAsyncDisposable
                 continue;
             }
 
-            if (_options.NoDelay)
+            if (_options.Socket.NoDelay)
             {
                 clientSocket.NoDelay = true;
             }
 
-            if (_options.KeepAlive)
+            if (_options.Socket.KeepAlive)
             {
                 clientSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
             }
@@ -273,7 +273,7 @@ public class StormWebSocketServer : IAsyncDisposable
         }
         else
         {
-            transport = new TcpTransport(socket, _options.MaxPendingReceiveBytes, _options.MaxPendingSendBytes);
+            transport = new TcpTransport(socket, _options.Socket.MaxPendingReceiveBytes, _options.Socket.MaxPendingSendBytes);
         }
 
         WebSocketSession? session = null;
@@ -297,13 +297,13 @@ public class StormWebSocketServer : IAsyncDisposable
             }
 
             // Setup heartbeat with dead connection detection
-            if (_wsOptions.PingInterval > TimeSpan.Zero)
+            if (_wsOptions.Heartbeat.PingInterval > TimeSpan.Zero)
             {
                 WsHeartbeat heartbeat = new WsHeartbeat(
                     sendPing: async ct2 => await session.WriteFrameAsync(
                         writer => WsFrameEncoder.WritePing(writer), cancellationToken: ct2),
-                    _wsOptions.PingInterval,
-                    _wsOptions.MaxMissedPongs);
+                    _wsOptions.Heartbeat.PingInterval,
+                    _wsOptions.Heartbeat.MaxMissedPongs);
                 heartbeat.OnTimeout = async () => { await session.CloseAsync(ct).ConfigureAwait(false); };
                 session.SetHeartbeat(heartbeat);
                 heartbeat.Start();
@@ -499,7 +499,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
                 break;
 
-            case WsOpCode.Ping when _wsOptions.AutoPong:
+            case WsOpCode.Ping when _wsOptions.Heartbeat.AutoPong:
                 ReadOnlyMemory<byte> pingPayload = frame.Payload;
                 await session.WriteFrameAsync(writer => WsFrameEncoder.WritePong(writer, pingPayload.Span));
                 break;

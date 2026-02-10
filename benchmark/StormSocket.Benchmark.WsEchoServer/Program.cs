@@ -1,4 +1,5 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Server;
 
 int port = 8080;
@@ -19,11 +20,17 @@ Console.WriteLine();
 StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, port),
-    NoDelay = true,
+    Socket = new SocketTuningOptions
+    {
+        NoDelay = true
+    },
     WebSocket = new WebSocketOptions
     {
-        PingInterval = TimeSpan.Zero,
-        AutoPong = true,
+        Heartbeat = new HeartbeatOptions
+        {
+            PingInterval = TimeSpan.Zero,
+            AutoPong = true,
+        },
     },
 });
 

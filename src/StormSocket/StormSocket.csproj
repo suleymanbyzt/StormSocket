@@ -12,7 +12,7 @@
 
     <!-- NuGet Package -->
     <PackageId>StormSocket</PackageId>
-    <Version>0.2.3</Version>
+    <Version>1.0.0</Version>
     <Authors>suleymanbyzt</Authors>
     <Description>Modern, high-performance, event-based TCP/WebSocket/SSL library for .NET built on System.IO.Pipelines. Zero subclassing — just subscribe to events and go.</Description>
     <PackageTags>tcp;websocket;ssl;tls;server;client;socket;networking;high-performance;pipelines</PackageTags>

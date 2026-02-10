@@ -16,7 +16,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            NoDelay = true,
+            Socket = new StormSocket.Core.SocketTuningOptions { NoDelay = true },
         });
 
         server.OnDataReceived += async (session, data) =>
@@ -141,7 +141,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            MaxPendingSendBytes = 1024,
+            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
             SlowConsumerPolicy = SlowConsumerPolicy.Drop,
         });
 
@@ -205,7 +205,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            MaxPendingSendBytes = 1024 * 16,
+            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 * 16 },
             SendBufferSize = 1024,
             SlowConsumerPolicy = SlowConsumerPolicy.Disconnect,
         });

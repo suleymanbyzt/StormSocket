@@ -1,5 +1,6 @@
 using System.Net;
 using StormSocket.Client;
+using StormSocket.Core;
 
 string address = "127.0.0.1";
 int port = 1111;
@@ -54,7 +55,10 @@ for (int i = 0; i < clientCount; i++)
     StormTcpClient client = new StormTcpClient(new ClientOptions
     {
         EndPoint = new IPEndPoint(IPAddress.Parse(address), port),
-        NoDelay = true,
+        Socket = new SocketTuningOptions
+        {
+            NoDelay = true
+        },
     });
 
     long received = 0;

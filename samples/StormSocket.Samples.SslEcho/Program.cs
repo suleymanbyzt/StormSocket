@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using StormSocket.Core;
 using StormSocket.Server;
 
 // Generate a self-signed certificate for demo purposes
@@ -9,7 +10,10 @@ X509Certificate2 cert = GenerateSelfSignedCert();
 StormTcpServer server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 5001),
-    NoDelay = true,
+    Socket = new SocketTuningOptions
+    {
+        NoDelay = true
+    },
     Ssl = new SslOptions { Certificate = cert },
 });
 

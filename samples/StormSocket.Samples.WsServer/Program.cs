@@ -10,24 +10,30 @@ StormWebSocketServer server = new(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 8080),
     Backlog = 128,
-    NoDelay = false,
     ReceiveBufferSize = 1024 * 64,
     SendBufferSize = 1024 * 64,
-    MaxPendingReceiveBytes = 1024 * 1024,
-    MaxPendingSendBytes = 1024 * 1024,
+    Socket = new SocketTuningOptions
+    {
+        NoDelay = false,
+        KeepAlive = false,
+        MaxPendingReceiveBytes = 1024 * 1024,
+        MaxPendingSendBytes = 1024 * 1024,
+    },
     Ssl = null,
     WebSocket = new WebSocketOptions
     {
-        PingInterval = TimeSpan.FromSeconds(1),
-        MaxMissedPongs = 3,
+        Heartbeat = new HeartbeatOptions
+        {
+            PingInterval = TimeSpan.FromSeconds(1),
+            MaxMissedPongs = 3,
+            AutoPong = true,
+        },
         MaxFrameSize = 64 * 1024,
-        AutoPong = true,
         AllowedOrigins = null, // allow all origins
     },
     SlowConsumerPolicy = SlowConsumerPolicy.Drop,
     DualMode = true,
     MaxConnections = 10, // set to 0 for unlimited connections
-    KeepAlive = false,
 });
 
 UserManager users = new();

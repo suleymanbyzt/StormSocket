@@ -1,4 +1,5 @@
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Server;
 
 int port = 1111;
@@ -19,7 +20,10 @@ Console.WriteLine();
 StormTcpServer server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, port),
-    NoDelay = true,
+    Socket = new SocketTuningOptions
+    {
+        NoDelay = true
+    },
 });
 
 server.OnDataReceived += async (session, data) =>

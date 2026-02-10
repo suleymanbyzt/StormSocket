@@ -15,16 +15,6 @@ public sealed class ServerOptions
     /// <summary>Maximum pending connection queue length. Default: 128.</summary>
     public int Backlog { get; init; } = 128;
 
-    /// <summary>Disables Nagle's algorithm for lower latency. Default: false.</summary>
-    public bool NoDelay { get; init; } = false;
-
-    /// <summary>
-    /// Enables TCP Keep-Alive on accepted connections.
-    /// Prevents idle connections from being silently dropped by firewalls, NATs, and load balancers.
-    /// Default: true.
-    /// </summary>
-    public bool KeepAlive { get; init; } = true;
-
     /// <summary>
     /// Enables dual-mode socket that accepts both IPv4 and IPv6 connections on a single port.
     /// When enabled, the server listens on IPv6Any and maps IPv4 clients to IPv6 addresses (e.g. ::ffff:192.168.1.1).
@@ -37,26 +27,6 @@ public sealed class ServerOptions
 
     /// <summary>Socket send buffer size in bytes. Default: 64 KB.</summary>
     public int SendBufferSize { get; init; } = 65536;
-
-    /// <summary>
-    /// Maximum bytes waiting to be sent before backpressure kicks in.
-    /// When this limit is reached, the behavior depends on <see cref="SlowConsumerPolicy"/>:
-    /// <list type="bullet">
-    /// <item><b>Wait</b> (default): Send operations block until the socket drains pending data.</item>
-    /// <item><b>Drop</b>: Messages to backpressured sessions are silently discarded.</item>
-    /// <item><b>Disconnect</b>: Backpressured sessions are immediately terminated via <c>Abort()</c>.</item>
-    /// </list>
-    /// Default: 1 MB. Set to 0 for unlimited (not recommended for production).
-    /// </summary>
-    public long MaxPendingSendBytes { get; init; } = 1024 * 1024;
-
-    /// <summary>
-    /// How much unprocessed incoming data to buffer before telling the client to slow down.
-    /// If your <c>OnDataReceived</c> handler is slower than the client's send rate,
-    /// this limit prevents memory from growing unboundedly — the OS pauses the sender via TCP flow control.
-    /// Default: 1 MB. Set to 0 for unlimited (not recommended for production).
-    /// </summary>
-    public long MaxPendingReceiveBytes { get; init; } = 1024 * 1024;
 
     /// <summary>Set to enable SSL/TLS encryption on all connections. Null = plain TCP.</summary>
     public SslOptions? Ssl { get; init; }
@@ -71,7 +41,7 @@ public sealed class ServerOptions
     public int MaxConnections { get; init; } = 0;
 
     /// <summary>
-    /// Determines behavior when a session's send buffer reaches <see cref="MaxPendingSendBytes"/>.
+    /// Determines behavior when a session's send buffer reaches <see cref="SocketTuningOptions.MaxPendingSendBytes"/>.
     /// Applies to both broadcast and individual <c>SendAsync</c> calls.
     /// <list type="bullet">
     /// <item><b>Wait</b> (default): Awaits until the socket drains. Safe but a slow client can stall the caller.</item>
@@ -86,4 +56,7 @@ public sealed class ServerOptions
     /// Use <see cref="LengthPrefixFramer"/>, <see cref="DelimiterFramer"/>, or implement <see cref="IMessageFramer"/>.
     /// </summary>
     public IMessageFramer? Framer { get; init; }
+
+    /// <summary>Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits).</summary>
+    public SocketTuningOptions Socket { get; init; } = new();
 }

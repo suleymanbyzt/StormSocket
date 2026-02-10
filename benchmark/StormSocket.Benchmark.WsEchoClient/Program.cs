@@ -1,4 +1,5 @@
 using StormSocket.Client;
+using StormSocket.Core;
 
 string address = "127.0.0.1";
 int port = 8080;
@@ -53,8 +54,14 @@ for (int i = 0; i < clientCount; i++)
     StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
     {
         Uri = new Uri($"ws://{address}:{port}/"),
-        NoDelay = true,
-        PingInterval = TimeSpan.Zero,
+        Socket = new SocketTuningOptions
+        {
+            NoDelay = true
+        },
+        Heartbeat = new HeartbeatOptions
+        {
+            PingInterval = TimeSpan.Zero
+        },
     });
 
     long received = 0;
