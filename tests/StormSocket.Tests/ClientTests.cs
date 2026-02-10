@@ -557,4 +557,123 @@ public class ClientTests
             await server.StopAsync();
         }
     }
+
+    [Fact]
+    public async Task WsServer_HandshakeTimeout_ClosesIdleConnection()
+    {
+        int port = GetPort();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                PingInterval = TimeSpan.Zero,
+                HandshakeTimeout = TimeSpan.FromMilliseconds(500),
+            },
+        });
+
+        TaskCompletionSource connected = new();
+        server.OnConnected += async _ => connected.TrySetResult();
+        await server.StartAsync();
+
+        try
+        {
+            // Open raw TCP connection but never send the upgrade request
+            using System.Net.Sockets.TcpClient raw = new();
+            await raw.ConnectAsync(IPAddress.Loopback, port);
+            System.Net.Sockets.NetworkStream stream = raw.GetStream();
+
+            // The server should close the connection after HandshakeTimeout
+            byte[] buf = new byte[1];
+            int read = await stream.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Stream closed = 0 bytes read
+            Assert.Equal(0, read);
+
+            // OnConnected should never have fired
+            Assert.False(connected.Task.IsCompleted);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_HandshakeTimeout_AllowsTimelyUpgrade()
+    {
+        int port = GetPort();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                PingInterval = TimeSpan.Zero,
+                HandshakeTimeout = TimeSpan.FromSeconds(5),
+            },
+        });
+
+        TaskCompletionSource connected = new();
+        server.OnConnected += async _ => connected.TrySetResult();
+        await server.StartAsync();
+
+        try
+        {
+            // Connect and immediately send upgrade - should succeed
+            (System.Net.Sockets.TcpClient raw, System.Net.Sockets.NetworkStream _) = await ConnectRawWebSocket(port);
+            using System.Net.Sockets.TcpClient client = raw;
+
+            await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(connected.Task.IsCompleted);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_HandshakeTimeout_PartialRequestTimesOut()
+    {
+        int port = GetPort();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                PingInterval = TimeSpan.Zero,
+                HandshakeTimeout = TimeSpan.FromMilliseconds(500),
+            },
+        });
+
+        TaskCompletionSource connected = new();
+        server.OnConnected += async _ => connected.TrySetResult();
+        await server.StartAsync();
+
+        try
+        {
+            // Send partial upgrade request (no terminating \r\n\r\n)
+            using System.Net.Sockets.TcpClient raw = new();
+            await raw.ConnectAsync(IPAddress.Loopback, port);
+            System.Net.Sockets.NetworkStream stream = raw.GetStream();
+
+            byte[] partial = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n");
+            await stream.WriteAsync(partial);
+            await stream.FlushAsync();
+
+            // Server should close after timeout
+            byte[] buf = new byte[1];
+            int read = await stream.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(0, read);
+            Assert.False(connected.Task.IsCompleted);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
 }

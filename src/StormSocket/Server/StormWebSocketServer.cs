@@ -356,11 +356,18 @@ public class StormWebSocketServer : IAsyncDisposable
 
     private async Task<bool> PerformUpgradeAsync(ITransport transport, EndPoint? remoteEndPoint, CancellationToken ct)
     {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        if (_wsOptions.HandshakeTimeout != Timeout.InfiniteTimeSpan)
+        {
+            cts.CancelAfter(_wsOptions.HandshakeTimeout);
+        }
+
         PipeReader reader = transport.Input;
 
-        while (!ct.IsCancellationRequested)
+        while (!cts.Token.IsCancellationRequested)
         {
-            ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
+            ReadResult result = await reader.ReadAsync(cts.Token).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
             WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(

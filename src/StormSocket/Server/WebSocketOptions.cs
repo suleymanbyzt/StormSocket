@@ -42,4 +42,12 @@ public sealed class WebSocketOptions
     /// </code>
     /// </example>
     public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    /// <summary>
+    /// Maximum time to wait for the client to complete the WebSocket upgrade handshake
+    /// after the TCP connection is accepted. Connections that don't upgrade within this
+    /// window are closed. Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable.
+    /// Default: 5 seconds.
+    /// </summary>
+    public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }
