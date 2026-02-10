@@ -1,4 +1,5 @@
 using StormSocket.Session;
+using StormSocket.WebSocket;
 
 namespace StormSocket.Events;
 
@@ -22,3 +23,9 @@ public delegate ValueTask WsConnectedHandler(ISession session);
 
 /// <summary>Fired when a WebSocket client disconnects.</summary>
 public delegate ValueTask WsDisconnectedHandler(ISession session);
+
+/// <summary>
+/// Fired before accepting a WebSocket upgrade request.
+/// Use context.Accept() or context.Reject() to control the connection.
+/// </summary>
+public delegate ValueTask WsConnectingHandler(WsUpgradeContext context);
