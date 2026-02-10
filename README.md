@@ -36,6 +36,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - [Examples](#examples)
   - [TCP Echo Server](#tcp-echo-server)
   - [WebSocket Chat Server](#websocket-chat-server)
+  - [WebSocket Authentication](#websocket-authentication)
   - [SSL/TLS Server](#ssltls-server)
   - [TCP Client](#tcp-client)
   - [WebSocket Client](#websocket-client)
@@ -83,6 +84,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - **Automatic heartbeat** with configurable ping interval and dead connection detection (missed pong counting)
 - **Session management** - track, query, broadcast, and kick connections
 - **Groups/Rooms** - named groups for targeted broadcast (chat rooms, game lobbies, etc.)
+- **WebSocket authentication** - access path, query params, headers (cookies, tokens) before accepting connections via `OnConnecting` event
 - **Rate limiting middleware** - opt-in per-session or per-IP rate limiting with configurable window, action (disconnect/drop), and exceeded event
 - **Middleware pipeline** - intercept connect, disconnect, data received, data sending, and errors (works on both server and client)
 - **Backpressure & buffer limits** - configurable send/receive pipe limits prevent memory exhaustion
@@ -261,6 +263,56 @@ await ws.DisposeAsync();
 ```
 
 Test with: `wscat -c ws://localhost:8080`
+
+## WebSocket Authentication
+
+Authenticate clients before accepting WebSocket connections using `OnConnecting`. Access headers, cookies, query params, and path from the HTTP upgrade request.
+
+```csharp
+using System.Net;
+using StormSocket.Server;
+
+var ws = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+});
+
+ws.OnConnecting += async (context) =>
+{
+    // access request details
+    Console.WriteLine($"Path: {context.Path}");                    // "/chat"
+    Console.WriteLine($"Query: {context.Query["room"]}");          // "general"
+    Console.WriteLine($"Remote: {context.RemoteEndPoint}");        // "192.168.1.5:54321"
+
+    // check authorization header
+    string? token = context.Headers.GetValueOrDefault("Authorization");
+    if (string.IsNullOrEmpty(token) || !IsValidToken(token))
+    {
+        context.Reject(401, "Invalid or missing token");
+        return;
+    }
+
+    // check origin for browser clients
+    // or you can use allowedorigins in options
+    string? origin = context.Headers.GetValueOrDefault("Origin");
+    if (origin != "https://myapp.com")
+    {
+        context.Reject(403, "Origin not allowed");
+        return;
+    }
+
+    context.Accept();
+};
+
+ws.OnConnected += async session =>
+{
+    Console.WriteLine($"Authenticated client connected: #{session.Id}");
+};
+
+await ws.StartAsync();
+```
+
+If no `OnConnecting` handler is registered, all connections are auto-accepted (backwards compatible).
 
 ## SSL/TLS Server
 

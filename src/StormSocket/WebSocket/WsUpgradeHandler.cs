@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -143,6 +144,162 @@ public static class WsUpgradeHandler
         return WsUpgradeResult.Success;
     }
 
+    /// <summary>
+    /// Parses a WebSocket upgrade request and returns a context with full request details.
+    /// Use this overload when you need access to path, query string, and all headers for authentication.
+    /// </summary>
+    public static WsUpgradeResult TryParseUpgradeRequest(
+        ref ReadOnlySequence<byte> buffer,
+        out WsUpgradeContext? context,
+        EndPoint? remoteEndPoint,
+        IReadOnlyList<string>? allowedOrigins = null)
+    {
+        context = null;
+
+        Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
+
+        ReadOnlySpan<byte> headerBytes;
+        SequencePosition consumed;
+
+        if (buffer.IsSingleSegment)
+        {
+            ReadOnlySpan<byte> span = buffer.FirstSpan;
+
+            int idx = IndexOf(span, headerEndSpan);
+            if (idx < 0)
+            {
+                return WsUpgradeResult.Incomplete;
+            }
+
+            headerBytes = span.Slice(0, idx);
+            consumed = buffer.GetPosition(idx + 4);
+        }
+        else
+        {
+            byte[] arr = buffer.ToArray();
+
+            int idx = IndexOf(arr.AsSpan(), headerEndSpan);
+            if (idx < 0)
+            {
+                return WsUpgradeResult.Incomplete;
+            }
+
+            headerBytes = arr.AsSpan(0, idx);
+            consumed = buffer.GetPosition(idx + 4);
+        }
+
+        string headerStr = Encoding.ASCII.GetString(headerBytes);
+        string[] lines = headerStr.Split("\r\n");
+
+        string path = "/";
+        string? queryString = null;
+
+        if (lines.Length > 0)
+        {
+            string[] requestLine = lines[0].Split(' ');
+            if (requestLine.Length >= 2)
+            {
+                string fullPath = requestLine[1];
+                int queryIndex = fullPath.IndexOf('?');
+                if (queryIndex >= 0)
+                {
+                    path = fullPath[..queryIndex];
+                    queryString = fullPath[(queryIndex + 1)..];
+                }
+                else
+                {
+                    path = fullPath;
+                }
+            }
+        }
+
+        Dictionary<string, string> headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        bool hasUpgrade = false;
+        bool hasConnection = false;
+        bool hasValidVersion = false;
+        string? key = null;
+        string? origin = null;
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            int colonIndex = line.IndexOf(':');
+            if (colonIndex <= 0) continue;
+
+            string headerName = line[..colonIndex].Trim();
+            string headerValue = line[(colonIndex + 1)..].Trim();
+            headers[headerName] = headerValue;
+
+            if (headerName.Equals("Upgrade", StringComparison.OrdinalIgnoreCase))
+            {
+                hasUpgrade = headerValue.Equals("websocket", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (headerName.Equals("Connection", StringComparison.OrdinalIgnoreCase))
+            {
+                hasConnection = headerValue.Contains("Upgrade", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (headerName.Equals("Sec-WebSocket-Version", StringComparison.OrdinalIgnoreCase))
+            {
+                hasValidVersion = headerValue == "13";
+            }
+            else if (headerName.Equals("Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
+            {
+                key = headerValue;
+            }
+            else if (headerName.Equals("Origin", StringComparison.OrdinalIgnoreCase))
+            {
+                origin = headerValue;
+            }
+        }
+
+        if (!hasUpgrade)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingUpgradeHeader;
+        }
+
+        if (!hasConnection)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingConnectionHeader;
+        }
+
+        if (!hasValidVersion)
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.InvalidVersion;
+        }
+
+        if (string.IsNullOrEmpty(key))
+        {
+            buffer = buffer.Slice(consumed);
+            return WsUpgradeResult.MissingKey;
+        }
+
+        if (allowedOrigins is { Count: > 0 })
+        {
+            bool originAllowed = false;
+            foreach (string allowed in allowedOrigins)
+            {
+                if (string.Equals(origin, allowed, StringComparison.OrdinalIgnoreCase))
+                {
+                    originAllowed = true;
+                    break;
+                }
+            }
+
+            if (!originAllowed)
+            {
+                buffer = buffer.Slice(consumed);
+                return WsUpgradeResult.ForbiddenOrigin;
+            }
+        }
+
+        context = new WsUpgradeContext(path, queryString, headers, key, remoteEndPoint);
+        buffer = buffer.Slice(consumed);
+        return WsUpgradeResult.Success;
+    }
+
     public static byte[] BuildUpgradeResponse(string wsKey)
     {
         string acceptKey = ComputeAcceptKey(wsKey);
@@ -177,6 +334,26 @@ public static class WsUpgradeHandler
 
         string errorResponse = $"HTTP/1.1 400 Bad Request\r\n{versionHeader}Content-Type: text/plain\r\nContent-Length: {errorReason.Length}\r\nConnection: close\r\n\r\n{errorReason}";
         return Encoding.ASCII.GetBytes(errorResponse);
+    }
+
+    /// <summary>
+    /// Builds a custom HTTP error response for rejected upgrade requests.
+    /// </summary>
+    public static byte[] BuildRejectResponse(int statusCode, string? reason = null)
+    {
+        string statusText = statusCode switch
+        {
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            429 => "Too Many Requests",
+            _ => "Error",
+        };
+
+        reason ??= statusText;
+        string response = $"HTTP/1.1 {statusCode} {statusText}\r\nContent-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
+        return Encoding.ASCII.GetBytes(response);
     }
 
     private static string ComputeAcceptKey(string wsKey)

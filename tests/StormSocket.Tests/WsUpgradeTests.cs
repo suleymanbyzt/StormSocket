@@ -187,4 +187,98 @@ public class WsUpgradeTests
     }
 
     #endregion
+
+    #region WsUpgradeContext Tests
+
+    [Fact]
+    public void TryParseUpgradeRequest_WithContext_ExtractsPathAndQuery()
+    {
+        string request = "GET /chat?room=general&token=abc HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeResult result = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        Assert.Equal(WsUpgradeResult.Success, result);
+        Assert.NotNull(context);
+        Assert.Equal("/chat", context!.Path);
+        Assert.Equal("room=general&token=abc", context.QueryString);
+        Assert.Equal("general", context.Query["room"]);
+        Assert.Equal("abc", context.Query["token"]);
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_WithContext_ExtractsAllHeaders()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer mytoken\r\nX-Custom: test\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeResult result = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        Assert.Equal(WsUpgradeResult.Success, result);
+        Assert.NotNull(context);
+        Assert.Equal("Bearer mytoken", context!.Headers["Authorization"]);
+        Assert.Equal("test", context.Headers["X-Custom"]);
+        Assert.Equal("localhost", context.Headers["Host"]);
+    }
+
+    [Fact]
+    public void WsUpgradeContext_Accept_SetsIsAccepted()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        context!.Accept();
+
+        Assert.True(context.IsHandled);
+        Assert.True(context.IsAccepted);
+    }
+
+    [Fact]
+    public void WsUpgradeContext_Reject_SetsStatusCode()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        context!.Reject(401, "Invalid token");
+
+        Assert.True(context.IsHandled);
+        Assert.False(context.IsAccepted);
+        Assert.Equal(401, context.RejectStatusCode);
+        Assert.Equal("Invalid token", context.RejectReason);
+    }
+
+    [Fact]
+    public void WsUpgradeContext_DoubleHandle_Throws()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        context!.Accept();
+
+        Assert.Throws<InvalidOperationException>(() => context.Accept());
+        Assert.Throws<InvalidOperationException>(() => context.Reject());
+    }
+
+    [Fact]
+    public void BuildRejectResponse_Returns401()
+    {
+        byte[] response = WsUpgradeHandler.BuildRejectResponse(401, "Invalid token");
+        string responseStr = Encoding.ASCII.GetString(response);
+
+        Assert.StartsWith("HTTP/1.1 401 Unauthorized", responseStr);
+        Assert.Contains("Invalid token", responseStr);
+    }
+
+    #endregion
 }

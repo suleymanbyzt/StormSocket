@@ -26,6 +26,20 @@ StormWebSocketServer ws = new(new ServerOptions
     KeepAlive = false,
 });
 
+ws.OnConnecting += async context =>
+{
+    IReadOnlyDictionary<string, string> headers = context.Headers;
+    foreach (KeyValuePair<string, string> header in headers)
+    {
+        Console.WriteLine($"Header Key:{header.Key} ---  Header Value:{header.Value}");
+    }
+    
+    // if you want to authenticate or reject certain connections, do it here and call context.Accept() or context.Reject()
+    Console.WriteLine($"[{context.RemoteEndPoint}] WebSocket connecting...");
+    context.Accept(); // accept all connections (you can add custom validation here)
+    await ValueTask.CompletedTask;
+};
+
 ws.OnConnected += async session =>
 {
     Console.WriteLine($"[{session.Id}] WebSocket connected ({ws.Sessions.Count} online)");

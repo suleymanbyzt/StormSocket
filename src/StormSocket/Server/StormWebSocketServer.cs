@@ -103,6 +103,29 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </summary>
     public event ErrorHandler? OnError;
 
+    /// <summary>
+    /// Fired before accepting a WebSocket upgrade request.
+    /// Use this to authenticate clients based on headers, cookies, query params, etc.
+    /// Call context.Accept() to proceed or context.Reject(statusCode) to deny.
+    /// If no handler is registered, connections are auto-accepted.
+    /// <para><b>Signature:</b> <c>async (WsUpgradeContext context) => { }</c></para>
+    /// <example>
+    /// <code>
+    /// server.OnConnecting += async (context) =>
+    /// {
+    ///     string? token = context.Headers.GetValueOrDefault("Authorization");
+    ///     if (!IsValidToken(token))
+    ///     {
+    ///         context.Reject(401, "Invalid token");
+    ///         return;
+    ///     }
+    ///     context.Accept();
+    /// };
+    /// </code>
+    /// </example>
+    /// </summary>
+    public event WsConnectingHandler? OnConnecting;
+
     public StormWebSocketServer(ServerOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -258,7 +281,7 @@ public class StormWebSocketServer : IAsyncDisposable
         {
             await transport.HandshakeAsync(ct).ConfigureAwait(false);
 
-            if (!await PerformUpgradeAsync(transport, ct).ConfigureAwait(false))
+            if (!await PerformUpgradeAsync(transport, socket.RemoteEndPoint, ct).ConfigureAwait(false))
             {
                 await transport.DisposeAsync().ConfigureAwait(false);
                 return;
@@ -331,7 +354,7 @@ public class StormWebSocketServer : IAsyncDisposable
         }
     }
 
-    private async Task<bool> PerformUpgradeAsync(ITransport transport, CancellationToken ct)
+    private async Task<bool> PerformUpgradeAsync(ITransport transport, EndPoint? remoteEndPoint, CancellationToken ct)
     {
         PipeReader reader = transport.Input;
 
@@ -340,13 +363,40 @@ public class StormWebSocketServer : IAsyncDisposable
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out string? wsKey, _wsOptions.AllowedOrigins);
+            WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(
+                ref buffer,
+                out WsUpgradeContext? context,
+                remoteEndPoint,
+                _wsOptions.AllowedOrigins);
 
             switch (upgradeResult)
             {
                 case WsUpgradeResult.Success:
                     reader.AdvanceTo(buffer.Start, buffer.End);
-                    byte[] response = WsUpgradeHandler.BuildUpgradeResponse(wsKey!);
+
+                    // Fire OnConnecting event if registered
+                    if (OnConnecting is not null)
+                    {
+                        await OnConnecting.Invoke(context!).ConfigureAwait(false);
+
+                        // If handler didn't call Accept() or Reject(), auto-accept
+                        if (!context!.IsHandled)
+                        {
+                            context.Accept();
+                        }
+
+                        // Handle rejection
+                        if (!context.IsAccepted)
+                        {
+                            byte[] rejectResponse = WsUpgradeHandler.BuildRejectResponse(
+                                context.RejectStatusCode,
+                                context.RejectReason);
+                            await WriteResponseAsync(transport, rejectResponse, ct).ConfigureAwait(false);
+                            return false;
+                        }
+                    }
+
+                    byte[] response = WsUpgradeHandler.BuildUpgradeResponse(context!.WsKey);
                     await WriteResponseAsync(transport, response, ct).ConfigureAwait(false);
                     return true;
 
