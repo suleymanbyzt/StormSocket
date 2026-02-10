@@ -94,6 +94,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - **Thread-safe writes** - all PipeWriter access serialized via `SemaphoreSlim` (no frame corruption)
 - **TCP Keep-Alive** - enabled by default, prevents idle connections from being silently dropped by firewalls and NATs
 - **Connection timeout** - configurable timeout for client connections
+- **Handshake timeout** - configurable timeout for WebSocket upgrade, closes idle TCP connections that never send an upgrade request (DoS protection)
 - **Socket error handling** - proper SocketError filtering (ConnectionReset, Abort, etc.)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
 - **Zero dependencies** beyond `System.IO.Pipelines`
@@ -860,6 +861,7 @@ StormSocket WsServer running on ws://0.0.0.0:8080
 | `MaxFrameSize` | `int` | `1048576` | Maximum frame payload (bytes). Oversized frames trigger close with `MessageTooBig` |
 | `AutoPong` | `bool` | `true` | Automatically reply to client Ping frames |
 | `AllowedOrigins` | `IReadOnlyList<string>?` | `null` | Allowed origins for CSWSH protection (RFC 6455 #10.2). `null` = allow all |
+| `HandshakeTimeout` | `TimeSpan` | `5s` | Max time for client to complete WebSocket upgrade after TCP connect. Prevents DoS via idle connections |
 
 ## ClientOptions
 
