@@ -249,10 +249,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 clientSocket.NoDelay = true;
             }
 
-            if (_options.Socket.KeepAlive)
-            {
-                clientSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            }
+            _options.Socket.ApplyKeepAlive(clientSocket);
 
             _ = HandleConnectionAsync(clientSocket, ct);
         }

@@ -45,6 +45,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
   - [Groups & Rooms](#groups--rooms)
   - [Middleware Pipeline](#middleware-pipeline)
   - [WebSocket Heartbeat & Dead Connection Detection](#websocket-heartbeat--dead-connection-detection)
+  - [TCP Keep-Alive Fine-Tuning](#tcp-keep-alive-fine-tuning)
   - [Slow Consumer Detection](#slow-consumer-detection)
   - [Rate Limiting](#rate-limiting)
   - [Closing Connections: CloseAsync vs Abort](#closing-connections-closeasync-vs-abort)
@@ -95,7 +96,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - **Concurrent broadcast** - sends to all sessions in parallel, one slow client never blocks others
 - **Max connections** - configurable limit, excess connections are immediately rejected
 - **Thread-safe writes** - all PipeWriter access serialized via `SemaphoreSlim` (no frame corruption)
-- **TCP Keep-Alive** - enabled by default, prevents idle connections from being silently dropped by firewalls and NATs
+- **TCP Keep-Alive** - enabled by default with fine-tuning options (idle time, probe interval, probe count) to detect dead connections faster than OS defaults
 - **Connection timeout** - configurable timeout for client connections
 - **Handshake timeout** - configurable timeout for WebSocket upgrade, closes idle TCP connections that never send an upgrade request (DoS protection)
 - **Socket error handling** - proper SocketError filtering (ConnectionReset, Abort, etc.)
@@ -655,6 +656,37 @@ t=60s  : Server sends Ping → missedPongs=3
 t=75s  : missedPongs=4 > 3 → OnTimeout → connection closed
 ```
 
+## TCP Keep-Alive Fine-Tuning
+
+TCP Keep-Alive detects dead connections at the OS level (cable unplugged, process crash, firewall timeout). By default, most operating systems wait **2 hours** before sending the first probe — too slow for production. StormSocket lets you tune this per socket:
+
+```csharp
+var server = new StormTcpServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 5000),
+    Socket = new SocketTuningOptions
+    {
+        KeepAlive = true,                                    // default: true
+        KeepAliveIdleTime = TimeSpan.FromMinutes(2),         // first probe after 2min idle
+        KeepAliveProbeInterval = TimeSpan.FromSeconds(30),   // probe every 30s after that
+        KeepAliveProbeCount = 3,                             // 3 failed probes → connection dead
+    },
+});
+```
+
+**How it works:**
+```
+t=0s   : Last data exchanged
+t=120s : No activity → OS sends first Keep-Alive probe → probes=1
+t=150s : No response → probe #2
+t=180s : No response → probe #3
+t=210s : No response → probe #4 > 3 → OS closes socket → OnDisconnected fires
+```
+
+This applies to both servers and clients — `SocketTuningOptions` is shared across `ServerOptions`, `ClientOptions`, and `WsClientOptions`. Set any property to `null` (default) to use the OS default for that specific setting.
+
+> **Note:** TCP Keep-Alive detects **dead** connections (peer is unreachable). It does **not** detect idle-but-alive connections (peer is reachable but not sending data). For WebSocket, use [Heartbeat](#websocket-heartbeat--dead-connection-detection) for application-level liveness detection.
+
 ## Slow Consumer Detection
 
 When broadcasting to thousands of clients, one slow client can stall delivery to everyone else. `SlowConsumerPolicy` solves this at the session level - it applies to **both broadcast and individual sends**.
@@ -902,6 +934,9 @@ Shared by `ServerOptions`, `ClientOptions`, and `WsClientOptions`.
 |---|---|---|---|
 | `NoDelay` | `bool` | `false` | Disable Nagle's algorithm for lower latency |
 | `KeepAlive` | `bool` | `true` | Enable TCP Keep-Alive to prevent idle connections from being dropped by firewalls/NATs |
+| `KeepAliveIdleTime` | `TimeSpan?` | `null` | Idle time before first keep-alive probe (null = OS default, typically 2 hours) |
+| `KeepAliveProbeInterval` | `TimeSpan?` | `null` | Interval between keep-alive probes (null = OS default, typically 75 seconds) |
+| `KeepAliveProbeCount` | `int?` | `null` | Failed probes before connection is closed (null = OS default, typically 8-10) |
 | `MaxPendingSendBytes` | `long` | `1048576` | Max bytes buffered before send backpressure (0 = unlimited) |
 | `MaxPendingReceiveBytes` | `long` | `1048576` | Max bytes buffered before receive backpressure (0 = unlimited) |
 
