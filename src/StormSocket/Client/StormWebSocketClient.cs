@@ -115,10 +115,7 @@ public class StormWebSocketClient : IAsyncDisposable
                 attempt.NoDelay = true;
             }
 
-            if (_options.Socket.KeepAlive)
-            {
-                attempt.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            }
+            _options.Socket.ApplyKeepAlive(attempt);
 
             try
             {

@@ -8,7 +8,10 @@ StormTcpServer server = new StormTcpServer(new ServerOptions
     EndPoint = new IPEndPoint(IPAddress.Any, 5000),
     Socket = new SocketTuningOptions
     {
-        NoDelay = true
+        NoDelay = true,
+        KeepAliveIdleTime = TimeSpan.FromMinutes(2),
+        KeepAliveProbeInterval = TimeSpan.FromSeconds(30),
+        KeepAliveProbeCount = 3,
     },
 });
 

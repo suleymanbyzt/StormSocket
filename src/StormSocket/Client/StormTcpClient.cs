@@ -95,10 +95,7 @@ public class StormTcpClient : IAsyncDisposable
             socket.NoDelay = true;
         }
 
-        if (_options.Socket.KeepAlive)
-        {
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-        }
+        _options.Socket.ApplyKeepAlive(socket);
 
         using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(_options.ConnectTimeout);
