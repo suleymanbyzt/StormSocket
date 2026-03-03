@@ -1,3 +1,4 @@
+using StormSocket.Core;
 using StormSocket.Session;
 using StormSocket.WebSocket;
 
@@ -7,7 +8,7 @@ namespace StormSocket.Events;
 public delegate ValueTask SessionConnectedHandler(ISession session);
 
 /// <summary>Fired when a TCP session disconnects.</summary>
-public delegate ValueTask SessionDisconnectedHandler(ISession session);
+public delegate ValueTask SessionDisconnectedHandler(ISession session, DisconnectReason reason);
 
 /// <summary>Fired when raw data (or a framed message) is received from a TCP session.</summary>
 public delegate ValueTask DataReceivedHandler(ISession session, ReadOnlyMemory<byte> data);
@@ -22,7 +23,7 @@ public delegate ValueTask WsMessageReceivedHandler(ISession session, WsMessage m
 public delegate ValueTask WsConnectedHandler(ISession session);
 
 /// <summary>Fired when a WebSocket client disconnects.</summary>
-public delegate ValueTask WsDisconnectedHandler(ISession session);
+public delegate ValueTask WsDisconnectedHandler(ISession session, DisconnectReason reason);
 
 /// <summary>
 /// Fired before accepting a WebSocket upgrade request.

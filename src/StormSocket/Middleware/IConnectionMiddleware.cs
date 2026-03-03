@@ -1,3 +1,4 @@
+using StormSocket.Core;
 using StormSocket.Session;
 
 namespace StormSocket.Middleware;
@@ -25,7 +26,7 @@ public interface IConnectionMiddleware
     ValueTask<ReadOnlyMemory<byte>> OnDataSendingAsync(ISession session, ReadOnlyMemory<byte> data) => ValueTask.FromResult(data);
 
     /// <summary>Called after a session disconnects. Middlewares are called in reverse order.</summary>
-    ValueTask OnDisconnectedAsync(ISession session) => ValueTask.CompletedTask;
+    ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason) => ValueTask.CompletedTask;
 
     /// <summary>Called when an exception occurs during connection handling.</summary>
     ValueTask OnErrorAsync(ISession session, Exception exception) => ValueTask.CompletedTask;

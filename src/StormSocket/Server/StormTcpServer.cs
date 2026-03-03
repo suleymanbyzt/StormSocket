@@ -50,12 +50,12 @@ public class StormTcpServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a client disconnects (gracefully or not).
-    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession session, DisconnectReason reason) => { }</c></para>
     /// <example>
     /// <code>
-    /// server.OnDisconnected += async (session) =>
+    /// server.OnDisconnected += async (session, reason) =>
     /// {
-    ///     Console.WriteLine($"#{session.Id} disconnected — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
+    ///     Console.WriteLine($"#{session.Id} disconnected ({reason}) — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
     /// };
     /// </code>
     /// </example>
@@ -277,6 +277,7 @@ public class StormTcpServer : IAsyncDisposable
         {
             if (session is not null)
             {
+                session.SetDisconnectReason(DisconnectReason.TransportError);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
             }
 
@@ -289,15 +290,19 @@ public class StormTcpServer : IAsyncDisposable
         {
             if (session is not null)
             {
+                // Default: if no specific reason was set, the client closed the connection
+                session.SetDisconnectReason(DisconnectReason.ClosedByClient);
+
                 session.SetState(ConnectionState.Closed);
                 Sessions.TryRemove(session.Id, out _);
                 Groups.RemoveFromAll(session);
 
-                await _pipeline.OnDisconnectedAsync(session).ConfigureAwait(false);
+                DisconnectReason reason = session.DisconnectReason;
+                await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
 
                 if (OnDisconnected is not null)
                 {
-                    await OnDisconnected.Invoke(session).ConfigureAwait(false);
+                    await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
                 }
 
                 await session.DisposeAsync().ConfigureAwait(false);

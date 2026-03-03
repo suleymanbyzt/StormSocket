@@ -1,10 +1,12 @@
+using StormSocket.Core;
+
 namespace StormSocket.Events;
 
 /// <summary>Fired when the client successfully connects to the server.</summary>
 public delegate ValueTask ClientConnectedHandler();
 
 /// <summary>Fired when the client disconnects from the server.</summary>
-public delegate ValueTask ClientDisconnectedHandler();
+public delegate ValueTask ClientDisconnectedHandler(DisconnectReason reason);
 
 /// <summary>Fired when raw data (or a framed message) is received from the server.</summary>
 public delegate ValueTask ClientDataReceivedHandler(ReadOnlyMemory<byte> data);

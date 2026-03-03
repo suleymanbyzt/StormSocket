@@ -36,9 +36,9 @@ server.OnConnected += async session =>
     Console.WriteLine($"[{session.Id}] Connected ({server.Sessions.Count} online)");
 };
 
-server.OnDisconnected += async session =>
+server.OnDisconnected += async (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] Disconnected (sent={session.Metrics.BytesSent}, recv={session.Metrics.BytesReceived})");
+    Console.WriteLine($"[{session.Id}] Disconnected ({reason}) (sent={session.Metrics.BytesSent}, recv={session.Metrics.BytesReceived})");
 };
 
 server.OnDataReceived += async (session, data) =>

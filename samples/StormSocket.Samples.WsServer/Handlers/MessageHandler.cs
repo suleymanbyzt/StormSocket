@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
@@ -55,7 +56,7 @@ public sealed class MessageHandler
         await _broadcast.SystemMessageAsync($"#{session.Id} joined (online: {_server.Sessions.Count})");
     }
 
-    private async ValueTask OnDisconnected(ISession session)
+    private async ValueTask OnDisconnected(ISession session, DisconnectReason reason)
     {
         if (_users.Remove(session.Id, out ConnectedUser? user))
         {

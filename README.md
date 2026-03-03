@@ -48,6 +48,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
   - [TCP Keep-Alive Fine-Tuning](#tcp-keep-alive-fine-tuning)
   - [Slow Consumer Detection](#slow-consumer-detection)
   - [Rate Limiting](#rate-limiting)
+  - [Disconnect Reasons](#disconnect-reasons)
   - [Closing Connections: CloseAsync vs Abort](#closing-connections-closeasync-vs-abort)
   - [Backpressure & Buffer Limits](#backpressure--buffer-limits)
   - [Full WebSocket Server with Admin Console](#full-websocket-server-with-admin-console)
@@ -98,6 +99,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - **Thread-safe writes** - all PipeWriter access serialized via `SemaphoreSlim` (no frame corruption)
 - **TCP Keep-Alive** - enabled by default with fine-tuning options (idle time, probe interval, probe count) to detect dead connections faster than OS defaults
 - **Connection timeout** - configurable timeout for client connections
+- **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`)
 - **Handshake timeout** - configurable timeout for WebSocket upgrade, closes idle TCP connections that never send an upgrade request (DoS protection)
 - **Socket error handling** - proper SocketError filtering (ConnectionReset, Abort, etc.)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
@@ -204,9 +206,9 @@ server.OnConnected += async session =>
     Console.WriteLine($"[{session.Id}] Connected ({server.Sessions.Count} online)");
 };
 
-server.OnDisconnected += async session =>
+server.OnDisconnected += async (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] Disconnected");
+    Console.WriteLine($"[{session.Id}] Disconnected ({reason})");
 };
 
 server.OnDataReceived += async (session, data) =>
@@ -373,9 +375,9 @@ client.OnDataReceived += async data =>
     Console.WriteLine($"Received: {Encoding.UTF8.GetString(data.Span)}");
 };
 
-client.OnDisconnected += async () =>
+client.OnDisconnected += async (reason) =>
 {
-    Console.WriteLine("Disconnected from server");
+    Console.WriteLine($"Disconnected from server ({reason})");
 };
 
 client.OnReconnecting += async (attempt, delay) =>
@@ -427,9 +429,9 @@ ws.OnMessageReceived += async msg =>
         Console.WriteLine($"Binary data: {msg.Data.Length} bytes");
 };
 
-ws.OnDisconnected += async () =>
+ws.OnDisconnected += async (reason) =>
 {
-    Console.WriteLine("WebSocket disconnected");
+    Console.WriteLine($"WebSocket disconnected ({reason})");
 };
 
 await ws.ConnectAsync();
@@ -608,9 +610,10 @@ public class AuthMiddleware : IConnectionMiddleware
         return ValueTask.FromResult(data);
     }
 
-    public ValueTask OnDisconnectedAsync(ISession session)
+    public ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
     {
         // Called in reverse order (like middleware unwinding)
+        Console.WriteLine($"#{session.Id} disconnected: {reason}");
         return ValueTask.CompletedTask;
     }
 
@@ -795,6 +798,54 @@ The `OnExceeded` event fires on every rate limit hit (regardless of action), so 
 
 > **Using .NET's built-in rate limiting?** The `IConnectionMiddleware` interface is your extension point — you can create your own middleware wrapping `System.Threading.RateLimiting` (TokenBucketRateLimiter, SlidingWindowRateLimiter, etc.) without any extra dependencies from StormSocket.
 
+## Disconnect Reasons
+
+Every `OnDisconnected` event includes a `DisconnectReason` explaining **why** the connection was closed. No more guessing from logs.
+
+```csharp
+// Server
+server.OnDisconnected += async (session, reason) =>
+{
+    Console.WriteLine($"#{session.Id} disconnected: {reason}");
+};
+
+// Client
+client.OnDisconnected += async (reason) =>
+{
+    Console.WriteLine($"Disconnected: {reason}");
+};
+```
+
+The reason is also available on the session itself via `session.DisconnectReason`.
+
+| Reason | When |
+|---|---|
+| `ClosedByClient` | Remote peer sent TCP FIN or WebSocket Close frame |
+| `ClosedByServer` | Local side called `CloseAsync()` |
+| `Aborted` | Local side called `Abort()` |
+| `ProtocolError` | WebSocket protocol violation (RFC 6455) |
+| `TransportError` | Socket/IO error (check `OnError` for details) |
+| `HeartbeatTimeout` | Remote peer stopped responding to Pings |
+| `HandshakeTimeout` | WebSocket upgrade not completed in time |
+| `SlowConsumer` | Session couldn't keep up with outgoing data |
+| `GoingAway` | Server is shutting down (RFC 6455 status 1001) |
+| `RateLimited` | Rate limit exceeded with `Disconnect` action |
+
+> **Note:** The reason is set internally before `OnDisconnected` fires. When multiple reasons apply (e.g. heartbeat timeout triggers a `CloseAsync`), the first/most specific reason wins.
+
+Middleware also receives the reason:
+
+```csharp
+public class LogMiddleware : IConnectionMiddleware
+{
+    public ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
+    {
+        _logger.LogInfo("#{Id} disconnected: {Reason}", session.Id, reason);
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
 ## Closing Connections: CloseAsync vs Abort
 
 StormSocket provides two ways to close a connection:
@@ -975,11 +1026,12 @@ Shared by `ClientOptions` and `WsClientOptions`.
 ```csharp
 public interface ISession : IAsyncDisposable
 {
-    long Id { get; }                      // Unique auto-incrementing ID
-    ConnectionState State { get; }        // Connected, Closing, Closed
-    ConnectionMetrics Metrics { get; }    // BytesSent, BytesReceived, Uptime
-    bool IsBackpressured { get; }         // True when send buffer is full
-    IReadOnlySet<string> Groups { get; }  // Group memberships
+    long Id { get; }                            // Unique auto-incrementing ID
+    ConnectionState State { get; }              // Connected, Closing, Closed
+    DisconnectReason DisconnectReason { get; }  // Why the connection was closed
+    ConnectionMetrics Metrics { get; }          // BytesSent, BytesReceived, Uptime
+    bool IsBackpressured { get; }               // True when send buffer is full
+    IReadOnlySet<string> Groups { get; }        // Group memberships
 
     ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default);
     ValueTask CloseAsync(CancellationToken ct = default);
@@ -1035,7 +1087,7 @@ var client = new StormTcpClient(options);
 
 // Events
 client.OnConnected += async () => { };
-client.OnDisconnected += async () => { };
+client.OnDisconnected += async (DisconnectReason reason) => { };
 client.OnDataReceived += async (ReadOnlyMemory<byte> data) => { };
 client.OnError += async (Exception ex) => { };
 client.OnReconnecting += async (int attempt, TimeSpan delay) => { };
@@ -1061,7 +1113,7 @@ var ws = new StormWebSocketClient(options);
 
 // Events
 ws.OnConnected += async () => { };
-ws.OnDisconnected += async () => { };
+ws.OnDisconnected += async (DisconnectReason reason) => { };
 ws.OnMessageReceived += async (WsMessage msg) => { };
 ws.OnError += async (Exception ex) => { };
 ws.OnReconnecting += async (int attempt, TimeSpan delay) => { };
@@ -1089,7 +1141,7 @@ public interface IConnectionMiddleware
     ValueTask OnConnectedAsync(ISession session);
     ValueTask<ReadOnlyMemory<byte>> OnDataReceivedAsync(ISession session, ReadOnlyMemory<byte> data);
     ValueTask<ReadOnlyMemory<byte>> OnDataSendingAsync(ISession session, ReadOnlyMemory<byte> data);
-    ValueTask OnDisconnectedAsync(ISession session);  // Called in reverse order
+    ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason);  // Called in reverse order
     ValueTask OnErrorAsync(ISession session, Exception exception);
 }
 ```
@@ -1136,8 +1188,9 @@ Client connects
     ├─ Heartbeat loop (sends Pings, tracks Pongs) [concurrent]
     │
     ├─ Connection closes (client disconnect / timeout / kick)
-    ├─ Middleware.OnDisconnectedAsync (reverse order)
-    ├─ OnDisconnected event
+    ├─ DisconnectReason set on session
+    ├─ Middleware.OnDisconnectedAsync(session, reason) (reverse order)
+    ├─ OnDisconnected(session, reason) event
     ├─ Session removed from SessionManager
     └─ Transport disposed
 ```
@@ -1157,8 +1210,9 @@ ConnectAsync called
     ├─ Heartbeat loop (WebSocket: sends masked Pings) [concurrent]
     │
     ├─ Connection closes (server disconnect / timeout / DisconnectAsync)
-    ├─ Middleware.OnDisconnectedAsync (reverse order)
-    ├─ OnDisconnected event
+    ├─ DisconnectReason determined
+    ├─ Middleware.OnDisconnectedAsync(session, reason) (reverse order)
+    ├─ OnDisconnected(reason) event
     │
     ├─ [Reconnect.Enabled = true]: wait Reconnect.Delay → OnReconnecting → retry
     └─ Transport disposed

@@ -106,7 +106,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
         });
         client.OnConnected += async () => connectedTcs.TrySetResult();
-        client.OnDisconnected += async () => disconnectedTcs.TrySetResult();
+        client.OnDisconnected += async (reason) => disconnectedTcs.TrySetResult();
 
         await client.ConnectAsync();
         await connectedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -208,7 +208,7 @@ public class ClientTests
             Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         client.OnConnected += async () => connectedTcs.TrySetResult();
-        client.OnDisconnected += async () => disconnectedTcs.TrySetResult();
+        client.OnDisconnected += async (reason) => disconnectedTcs.TrySetResult();
 
         await client.ConnectAsync();
         await connectedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -330,7 +330,7 @@ public class ClientTests
             serverSession = (WebSocketSession)session;
             serverConnected.TrySetResult();
         };
-        server.OnDisconnected += async _ => serverDisconnected.TrySetResult();
+        server.OnDisconnected += async (_, _) => serverDisconnected.TrySetResult();
         await server.StartAsync();
 
         // Client with AutoPong=true (default) will respond to pings
@@ -357,7 +357,7 @@ public class ClientTests
     public async Task Heartbeat_DeadConnection_ClosesAfterMissedPongs()
     {
         int port = GetPort();
-        TaskCompletionSource serverDisconnected = new();
+        TaskCompletionSource<StormSocket.Core.DisconnectReason> serverDisconnected = new();
 
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
@@ -372,7 +372,7 @@ public class ClientTests
                 },
             },
         });
-        server.OnDisconnected += async _ => serverDisconnected.TrySetResult();
+        server.OnDisconnected += async (_, reason) => serverDisconnected.TrySetResult(reason);
         await server.StartAsync();
 
         // Connect a raw TCP socket does WebSocket upgrade but NEVER sends pong
@@ -397,10 +397,11 @@ public class ClientTests
         // After MaxMissedPongs(2) + 1 tick = ~300ms, server should close us
 
         // Wait for server to detect dead connection and disconnect
-        await serverDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        StormSocket.Core.DisconnectReason reason = await serverDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Server should have removed the session
         Assert.Equal(0, server.Sessions.Count);
+        Assert.Equal(StormSocket.Core.DisconnectReason.HeartbeatTimeout, reason);
     }
 
     [Fact]
@@ -525,9 +526,9 @@ public class ClientTests
         });
 
         TaskCompletionSource<WebSocketSession> connected = new();
-        TaskCompletionSource disconnected = new();
+        TaskCompletionSource<StormSocket.Core.DisconnectReason> disconnected = new();
         server.OnConnected += async session => connected.TrySetResult((WebSocketSession)session);
-        server.OnDisconnected += async _ => disconnected.TrySetResult();
+        server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
         await server.StartAsync();
 
         try
@@ -553,8 +554,9 @@ public class ClientTests
             });
 
             // Wait for server to disconnect the slow client
-            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            StormSocket.Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(0, server.Sessions.Count);
+            Assert.Equal(StormSocket.Core.DisconnectReason.SlowConsumer, reason);
 
             floodCts.Cancel();
         }

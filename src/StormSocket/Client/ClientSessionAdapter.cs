@@ -27,6 +27,8 @@ internal sealed class ClientSessionAdapter : ISession
 
     public ConnectionState State => _tcpClient?.State ?? _wsClient?.State ?? ConnectionState.Closed;
 
+    public DisconnectReason DisconnectReason => _tcpClient?.DisconnectReason ?? _wsClient?.DisconnectReason ?? DisconnectReason.None;
+
     public ConnectionMetrics Metrics => _tcpClient?.Metrics ?? _wsClient?.Metrics ?? new ConnectionMetrics();
 
     public EndPoint? RemoteEndPoint => _tcpClient?.RemoteEndPoint ?? _wsClient?.RemoteEndPoint;

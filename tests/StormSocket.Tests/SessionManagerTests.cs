@@ -13,6 +13,8 @@ public class SessionManagerTests
 
         public ConnectionState State => ConnectionState.Connected;
 
+        public DisconnectReason DisconnectReason => DisconnectReason.None;
+
         public ConnectionMetrics Metrics { get; } = new();
 
         public EndPoint? RemoteEndPoint => null;

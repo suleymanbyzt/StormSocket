@@ -58,7 +58,7 @@ public class TcpServerIntegrationTests
         });
 
         TaskCompletionSource<long> connected = new TaskCompletionSource<long>();
-        TaskCompletionSource<long> disconnected = new TaskCompletionSource<long>();
+        TaskCompletionSource<(long id, DisconnectReason reason)> disconnected = new();
 
         server.OnConnected += async session =>
         {
@@ -66,9 +66,9 @@ public class TcpServerIntegrationTests
             await ValueTask.CompletedTask;
         };
 
-        server.OnDisconnected += async session =>
+        server.OnDisconnected += async (session, reason) =>
         {
-            disconnected.TrySetResult(session.Id);
+            disconnected.TrySetResult((session.Id, reason));
             await ValueTask.CompletedTask;
         };
 
@@ -84,8 +84,9 @@ public class TcpServerIntegrationTests
 
             client.Close();
 
-            long discId = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var (discId, discReason) = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(connId, discId);
+            Assert.Equal(DisconnectReason.ClosedByClient, discReason);
         }
         finally
         {
@@ -211,9 +212,9 @@ public class TcpServerIntegrationTests
         });
 
         TaskCompletionSource<ISession> connected = new();
-        TaskCompletionSource disconnected = new();
+        TaskCompletionSource<DisconnectReason> disconnected = new();
         server.OnConnected += async session => connected.TrySetResult(session);
-        server.OnDisconnected += async _ => disconnected.TrySetResult();
+        server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
         await server.StartAsync();
 
         try
@@ -243,8 +244,9 @@ public class TcpServerIntegrationTests
             });
 
             // Wait for server to disconnect the slow client
-            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(0, server.Sessions.Count);
+            Assert.Equal(DisconnectReason.SlowConsumer, reason);
 
             floodCts.Cancel();
         }

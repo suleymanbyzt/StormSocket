@@ -22,11 +22,13 @@ public sealed class WebSocketSession : ISession
     private readonly HashSet<string> _groups = [];
     private volatile ConnectionState _state;
     private volatile bool _isBackpressured;
+    private int _disconnectReason;
     private int _closeGuard;
     private WsHeartbeat? _heartbeat;
 
     public long Id { get; }
     public ConnectionState State => _state;
+    public DisconnectReason DisconnectReason => (DisconnectReason)_disconnectReason;
     public ConnectionMetrics Metrics { get; } = new();
     public EndPoint? RemoteEndPoint { get; }
     public bool IsBackpressured => _isBackpressured;
@@ -57,6 +59,12 @@ public sealed class WebSocketSession : ISession
     }
 
     internal void SetState(ConnectionState state) => _state = state;
+
+    /// <summary>Sets the disconnect reason. Only the first call wins (no overwrite).</summary>
+    internal void SetDisconnectReason(DisconnectReason reason)
+    {
+        Interlocked.CompareExchange(ref _disconnectReason, (int)reason, (int)DisconnectReason.None);
+    }
 
     internal void NotifyPongReceived()
     {
@@ -103,6 +111,7 @@ public sealed class WebSocketSession : ISession
         _isBackpressured = true;
         if (_policy == SlowConsumerPolicy.Disconnect)
         {
+            SetDisconnectReason(DisconnectReason.SlowConsumer);
             Abort();
         }
 
@@ -135,6 +144,7 @@ public sealed class WebSocketSession : ISession
                 _isBackpressured = true;
                 if (_policy == SlowConsumerPolicy.Disconnect)
                 {
+                    SetDisconnectReason(DisconnectReason.SlowConsumer);
                     Abort();
                 }
 
@@ -166,6 +176,7 @@ public sealed class WebSocketSession : ISession
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
             {
+                SetDisconnectReason(DisconnectReason.SlowConsumer);
                 Abort();
             }
 
@@ -185,6 +196,7 @@ public sealed class WebSocketSession : ISession
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
             {
+                SetDisconnectReason(DisconnectReason.SlowConsumer);
                 Abort();
             }
 
@@ -205,6 +217,7 @@ public sealed class WebSocketSession : ISession
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
             {
+                SetDisconnectReason(DisconnectReason.SlowConsumer);
                 Abort();
             }
 
@@ -225,6 +238,7 @@ public sealed class WebSocketSession : ISession
             return;
         }
 
+        SetDisconnectReason(DisconnectReason.ClosedByServer);
         _state = ConnectionState.Closing;
 
         try
@@ -256,6 +270,7 @@ public sealed class WebSocketSession : ISession
             return;
         }
 
+        SetDisconnectReason(DisconnectReason.Aborted);
         _state = ConnectionState.Closing;
         _ = _transport.CloseAsync();
     }
