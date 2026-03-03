@@ -286,6 +286,7 @@ public class StormWebSocketServer : IAsyncDisposable
             }
 
             session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
+            using WsFragmentAssembler assembler = new(_wsOptions.MaxMessageSize);
             Sessions.TryAdd(session);
 
             // Route socket errors to the server's OnError event
@@ -318,7 +319,7 @@ public class StormWebSocketServer : IAsyncDisposable
             }
 
             // Frame read loop
-            await ReadFrameLoopAsync(session, transport, ct).ConfigureAwait(false);
+            await ReadFrameLoopAsync(session, transport, assembler, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -443,7 +444,7 @@ public class StormWebSocketServer : IAsyncDisposable
         await transport.Output.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task ReadFrameLoopAsync(WebSocketSession session, ITransport transport, CancellationToken ct)
+    private async Task ReadFrameLoopAsync(WebSocketSession session, ITransport transport, WsFragmentAssembler assembler, CancellationToken ct)
     {
         PipeReader reader = transport.Input;
 
@@ -456,7 +457,18 @@ public class StormWebSocketServer : IAsyncDisposable
             {
                 while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _wsOptions.MaxFrameSize))
                 {
-                    await HandleFrameAsync(session, transport, frame).ConfigureAwait(false);
+                    if (frame.IsControl)
+                    {
+                        await HandleFrameAsync(session, transport, frame).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        WsMessage? message = assembler.TryAssemble(in frame);
+                        if (message is not null)
+                        {
+                            await HandleMessageAsync(session, message.Value).ConfigureAwait(false);
+                        }
+                    }
                 }
             }
             catch (WsProtocolException ex)
@@ -483,32 +495,26 @@ public class StormWebSocketServer : IAsyncDisposable
         }
     }
 
+    private async ValueTask HandleMessageAsync(WebSocketSession session, WsMessage msg)
+    {
+        session.Metrics.AddBytesReceived(msg.Data.Length);
+
+        ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
+        if (processed.IsEmpty)
+        {
+            return;
+        }
+
+        if (OnMessageReceived is not null)
+        {
+            await OnMessageReceived.Invoke(session, msg).ConfigureAwait(false);
+        }
+    }
+
     private async ValueTask HandleFrameAsync(WebSocketSession session, ITransport transport, WsFrame frame)
     {
         switch (frame.OpCode)
         {
-            case WsOpCode.Text:
-            case WsOpCode.Binary:
-                session.Metrics.AddBytesReceived(frame.Payload.Length);
-                WsMessage msg = new WsMessage
-                {
-                    Data = frame.Payload,
-                    IsText = frame.IsText,
-                };
-
-                ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, frame.Payload).ConfigureAwait(false);
-                if (processed.IsEmpty)
-                {
-                    return;
-                }
-
-                if (OnMessageReceived is not null)
-                {
-                    await OnMessageReceived.Invoke(session, msg).ConfigureAwait(false);
-                }
-
-                break;
-
             case WsOpCode.Ping when _wsOptions.Heartbeat.AutoPong:
                 ReadOnlyMemory<byte> pingPayload = frame.Payload;
                 await session.WriteFrameAsync(writer => WsFrameEncoder.WritePong(writer, pingPayload.Span));

@@ -11,6 +11,13 @@ public sealed class WebSocketOptions
     public int MaxFrameSize { get; init; } = 1024 * 1024;
 
     /// <summary>
+    /// Maximum total size of a reassembled WebSocket message across all fragments.
+    /// Messages exceeding this limit will trigger a close with status 1009 (MessageTooBig).
+    /// Default: 4 MB.
+    /// </summary>
+    public int MaxMessageSize { get; init; } = 4 * 1024 * 1024;
+
+    /// <summary>
     /// List of allowed origins for CSWSH protection (RFC 6455 10.2).
     /// If empty or null, all origins are allowed (default, for non-browser use cases).
     /// </summary>

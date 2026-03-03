@@ -233,6 +233,7 @@ public class StormWebSocketClient : IAsyncDisposable
     private async Task RunFrameLoopAsync(CancellationToken ct)
     {
         ClientSessionAdapter sessionAdapter = new ClientSessionAdapter(this);
+        using WsFragmentAssembler assembler = new(_options.MaxMessageSize);
         try
         {
             PipeReader reader = _transport!.Input;
@@ -245,7 +246,18 @@ public class StormWebSocketClient : IAsyncDisposable
                 {
                     while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _options.MaxFrameSize))
                     {
-                        await HandleFrameAsync(sessionAdapter, frame, ct).ConfigureAwait(false);
+                        if (frame.IsControl)
+                        {
+                            await HandleFrameAsync(sessionAdapter, frame, ct).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            WsMessage? message = assembler.TryAssemble(in frame);
+                            if (message is not null)
+                            {
+                                await HandleClientMessageAsync(sessionAdapter, message.Value).ConfigureAwait(false);
+                            }
+                        }
                     }
                 }
                 catch (WsProtocolException ex)
@@ -309,33 +321,26 @@ public class StormWebSocketClient : IAsyncDisposable
         }
     }
 
+    private async ValueTask HandleClientMessageAsync(ClientSessionAdapter sessionAdapter, WsMessage msg)
+    {
+        Metrics.AddBytesReceived(msg.Data.Length);
+
+        ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, msg.Data).ConfigureAwait(false);
+        if (processed.IsEmpty)
+        {
+            return;
+        }
+
+        if (OnMessageReceived is not null)
+        {
+            await OnMessageReceived.Invoke(msg).ConfigureAwait(false);
+        }
+    }
+
     private async ValueTask HandleFrameAsync(ClientSessionAdapter sessionAdapter, WsFrame frame, CancellationToken ct)
     {
         switch (frame.OpCode)
         {
-            case WsOpCode.Text:
-            case WsOpCode.Binary:
-                Metrics.AddBytesReceived(frame.Payload.Length);
-
-                ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, frame.Payload).ConfigureAwait(false);
-                if (processed.IsEmpty)
-                {
-                    return;
-                }
-
-                WsMessage msg = new WsMessage
-                {
-                    Data = frame.Payload,
-                    IsText = frame.IsText,
-                };
-
-                if (OnMessageReceived is not null)
-                {
-                    await OnMessageReceived.Invoke(msg).ConfigureAwait(false);
-                }
-
-                break;
-
             case WsOpCode.Ping when _options.Heartbeat.AutoPong:
                 ReadOnlyMemory<byte> pingPayload = frame.Payload;
                 await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedPong(writer, pingPayload.Span), cancellationToken: ct);
