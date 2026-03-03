@@ -2,5 +2,15 @@
   href: index.md
 - name: Getting Started
   href: getting-started.md
+- name: Examples
+  href: examples.md
+- name: Features Guide
+  href: features.md
 - name: Middleware
   href: middleware.md
+- name: Configuration
+  href: configuration.md
+- name: API Reference
+  href: api-reference.md
+- name: Architecture
+  href: architecture.md
