@@ -44,8 +44,12 @@ server.OnDataReceived += async (session, data) =>
 await server.StartAsync();
 ```
 
-## Next Steps
+## Documentation
 
 - [Getting Started](getting-started.md) — installation, first TCP server, first WebSocket server
+- [Examples](examples.md) — TCP echo, WebSocket chat, auth, SSL, clients, full admin console
+- [Features Guide](features.md) — sessions, groups, framing, heartbeat, slow consumer, rate limiting, fragmentation, disconnect reasons
 - [Middleware](middleware.md) — pipeline, rate limiting, custom middleware
-- [API Reference](/api/) — full API documentation generated from XML comments
+- [Configuration](configuration.md) — all options tables (ServerOptions, WebSocketOptions, ClientOptions, etc.)
+- [API Reference](api-reference.md) — ISession, WebSocketSession, clients, middleware, framers
+- [Architecture](architecture.md) — connection lifecycle, write serialization, backpressure internals
