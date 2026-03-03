@@ -52,9 +52,9 @@ ws.OnConnected += async session =>
     await ValueTask.CompletedTask;
 };
 
-ws.OnDisconnected += async session =>
+ws.OnDisconnected += async (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] WebSocket disconnected ({ws.Sessions.Count} online)");
+    Console.WriteLine($"[{session.Id}] WebSocket disconnected ({reason}) ({ws.Sessions.Count} online)");
     await ValueTask.CompletedTask;
 };
 

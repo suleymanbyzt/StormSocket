@@ -1,3 +1,4 @@
+using StormSocket.Core;
 using StormSocket.Session;
 
 namespace StormSocket.Middleware;
@@ -61,11 +62,11 @@ public sealed class MiddlewarePipeline
         return current;
     }
 
-    public async ValueTask OnDisconnectedAsync(ISession session)
+    public async ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
     {
         for (int i = _middlewares.Count - 1; i >= 0; i--)
         {
-            await _middlewares[i].OnDisconnectedAsync(session).ConfigureAwait(false);
+            await _middlewares[i].OnDisconnectedAsync(session, reason).ConfigureAwait(false);
         }
     }
 

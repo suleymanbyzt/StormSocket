@@ -12,6 +12,7 @@ public class RateLimitMiddlewareTests
     {
         public long Id { get; init; }
         public ConnectionState State => ConnectionState.Connected;
+        public DisconnectReason DisconnectReason => DisconnectReason.None;
         public ConnectionMetrics Metrics { get; } = new();
         public EndPoint? RemoteEndPoint { get; init; }
         public bool IsBackpressured => false;
@@ -254,7 +255,7 @@ public class RateLimitMiddlewareTests
         Assert.True(blocked.IsEmpty);
 
         // Disconnect and reconnect (simulated with same ID)
-        await middleware.OnDisconnectedAsync(session);
+        await middleware.OnDisconnectedAsync(session, DisconnectReason.None);
 
         // Fresh counter after reconnect
         ReadOnlyMemory<byte> allowed = await middleware.OnDataReceivedAsync(session, data);
@@ -289,14 +290,14 @@ public class RateLimitMiddlewareTests
         Assert.True(blocked.IsEmpty);
 
         // Disconnect one session — entry stays (session2 still connected)
-        await middleware.OnDisconnectedAsync(session1);
+        await middleware.OnDisconnectedAsync(session1, DisconnectReason.None);
 
         // Still blocked because entry is shared and not reset
         ReadOnlyMemory<byte> stillBlocked = await middleware.OnDataReceivedAsync(session2, data);
         Assert.True(stillBlocked.IsEmpty);
 
         // Disconnect last session — entry removed
-        await middleware.OnDisconnectedAsync(session2);
+        await middleware.OnDisconnectedAsync(session2, DisconnectReason.None);
 
         // New connection gets fresh counter
         FakeSession session3 = new() { Id = 3, RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 5002) };

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Session;
 
@@ -66,7 +67,7 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
         return HandleExceededAsync(session);
     }
 
-    public ValueTask OnDisconnectedAsync(ISession session)
+    public ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
     {
         if (_options.Scope == RateLimitScope.IpAddress)
         {
@@ -104,6 +105,8 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
 
         if (_options.ExceededAction == RateLimitAction.Disconnect)
         {
+            if (session is TcpSession tcp) tcp.SetDisconnectReason(DisconnectReason.RateLimited);
+            else if (session is WebSocketSession ws) ws.SetDisconnectReason(DisconnectReason.RateLimited);
             session.Abort();
 
             if (_options.Scope == RateLimitScope.IpAddress)

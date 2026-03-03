@@ -3,6 +3,9 @@ using StormSocket.Core;
 
 namespace StormSocket.Session;
 
+// Note: DisconnectReason is set internally before OnDisconnected fires.
+// Consumers read it from the session or receive it as a delegate parameter.
+
 /// <summary>
 /// Represents an active client connection. Use this to send data, check metrics, or manage groups.
 /// </summary>
@@ -17,6 +20,11 @@ public interface ISession : IAsyncDisposable
     /// Current connection state (Connecting, Connected, Closing, Closed).
     /// </summary>
     ConnectionState State { get; }
+
+    /// <summary>
+    /// The reason the connection was closed. Set internally before <c>OnDisconnected</c> fires.
+    /// </summary>
+    DisconnectReason DisconnectReason { get; }
 
     /// <summary>
     /// Tracks bytes sent/received and connection uptime.

@@ -58,12 +58,12 @@ public class StormWebSocketServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a WebSocket client disconnects (gracefully or not).
-    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession session, DisconnectReason reason) => { }</c></para>
     /// <example>
     /// <code>
-    /// server.OnDisconnected += async (session) =>
+    /// server.OnDisconnected += async (session, reason) =>
     /// {
-    ///     Console.WriteLine($"#{session.Id} disconnected — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
+    ///     Console.WriteLine($"#{session.Id} disconnected ({reason}) — sent: {session.Metrics.BytesSent}, recv: {session.Metrics.BytesReceived}");
     /// };
     /// </code>
     /// </example>
@@ -201,13 +201,14 @@ public class StormWebSocketServer : IAsyncDisposable
         {
             if (s is WebSocketSession ws && ws.State == ConnectionState.Connected)
             {
+                ws.SetDisconnectReason(DisconnectReason.GoingAway);
                 try
                 {
                     await ws.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, WsCloseStatus.GoingAway));
                 }
                 catch
                 {
-                    // ignred
+                    // ignored
                 }
             }
         }
@@ -301,7 +302,11 @@ public class StormWebSocketServer : IAsyncDisposable
                         writer => WsFrameEncoder.WritePing(writer), cancellationToken: ct2),
                     _wsOptions.Heartbeat.PingInterval,
                     _wsOptions.Heartbeat.MaxMissedPongs);
-                heartbeat.OnTimeout = async () => { await session.CloseAsync(ct).ConfigureAwait(false); };
+                heartbeat.OnTimeout = async () =>
+                {
+                    session.SetDisconnectReason(DisconnectReason.HeartbeatTimeout);
+                    await session.CloseAsync(ct).ConfigureAwait(false);
+                };
                 session.SetHeartbeat(heartbeat);
                 heartbeat.Start();
             }
@@ -319,6 +324,9 @@ public class StormWebSocketServer : IAsyncDisposable
         {
             if (session is not null)
             {
+                session.SetDisconnectReason(ex is OperationCanceledException
+                    ? DisconnectReason.HandshakeTimeout
+                    : DisconnectReason.TransportError);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
             }
 
@@ -331,15 +339,19 @@ public class StormWebSocketServer : IAsyncDisposable
         {
             if (session is not null)
             {
+                // Default: if no specific reason was set, the client closed the connection
+                session.SetDisconnectReason(DisconnectReason.ClosedByClient);
+
                 session.SetState(ConnectionState.Closed);
                 Sessions.TryRemove(session.Id, out _);
                 Groups.RemoveFromAll(session);
 
-                await _pipeline.OnDisconnectedAsync(session).ConfigureAwait(false);
-                
+                DisconnectReason reason = session.DisconnectReason;
+                await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
+
                 if (OnDisconnected is not null)
                 {
-                    await OnDisconnected.Invoke(session).ConfigureAwait(false);
+                    await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
                 }
 
                 await session.DisposeAsync().ConfigureAwait(false);
@@ -449,15 +461,16 @@ public class StormWebSocketServer : IAsyncDisposable
             }
             catch (WsProtocolException ex)
             {
+                session.SetDisconnectReason(DisconnectReason.ProtocolError);
                 WsCloseStatus status = ex.CloseStatus;
                 await session.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, status), cancellationToken: ct);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
-                
+
                 if (OnError is not null)
                 {
                     await OnError.Invoke(session, ex).ConfigureAwait(false);
                 }
-                
+
                 break;
             }
 
@@ -506,6 +519,8 @@ public class StormWebSocketServer : IAsyncDisposable
                 break;
 
             case WsOpCode.Close:
+                session.SetDisconnectReason(DisconnectReason.ClosedByClient);
+
                 // Echo back the client's close status if present, otherwise NormalClosure
                 WsCloseStatus closeStatus = WsCloseStatus.NormalClosure;
                 if (frame.Payload.Length >= 2)

@@ -32,12 +32,16 @@ public class StormTcpClient : IAsyncDisposable
     private Task? _runTask;
     private bool _disposed;
     private volatile ConnectionState _state = ConnectionState.Closed;
+    private volatile DisconnectReason _disconnectReason;
 
     /// <summary>Tracks bytes sent/received and connection uptime.</summary>
     public ConnectionMetrics Metrics { get; private set; } = new();
 
     /// <summary>Current connection state.</summary>
     public ConnectionState State => _state;
+
+    /// <summary>The reason the last connection was closed.</summary>
+    internal DisconnectReason DisconnectReason => _disconnectReason;
 
     /// <summary>The remote server's endpoint.</summary>
     public EndPoint? RemoteEndPoint => _options.EndPoint;
@@ -86,6 +90,7 @@ public class StormTcpClient : IAsyncDisposable
     private async Task ConnectCoreAsync(CancellationToken ct)
     {
         _state = ConnectionState.Connecting;
+        _disconnectReason = DisconnectReason.None;
         Metrics = new ConnectionMetrics();
 
         Socket socket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
@@ -183,6 +188,8 @@ public class StormTcpClient : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (_disconnectReason == DisconnectReason.None)
+                _disconnectReason = DisconnectReason.TransportError;
             await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
             if (OnError is not null)
             {
@@ -191,12 +198,17 @@ public class StormTcpClient : IAsyncDisposable
         }
         finally
         {
+            // Default: if no specific reason was set, the server closed the connection
+            if (_disconnectReason == DisconnectReason.None)
+                _disconnectReason = DisconnectReason.ClosedByServer;
+
             _state = ConnectionState.Closed;
 
-            await _pipeline.OnDisconnectedAsync(sessionAdapter).ConfigureAwait(false);
+            DisconnectReason reason = _disconnectReason;
+            await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
             if (OnDisconnected is not null)
             {
-                await OnDisconnected.Invoke().ConfigureAwait(false);
+                await OnDisconnected.Invoke(reason).ConfigureAwait(false);
             }
 
             if (_transport is not null)

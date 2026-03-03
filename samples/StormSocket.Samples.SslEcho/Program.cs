@@ -23,9 +23,9 @@ server.OnConnected += async session =>
     await ValueTask.CompletedTask;
 };
 
-server.OnDisconnected += async session =>
+server.OnDisconnected += async (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] SSL Disconnected");
+    Console.WriteLine($"[{session.Id}] SSL Disconnected ({reason})");
     await ValueTask.CompletedTask;
 };
 

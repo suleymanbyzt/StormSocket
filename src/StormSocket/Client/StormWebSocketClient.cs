@@ -38,12 +38,16 @@ public class StormWebSocketClient : IAsyncDisposable
     private WsHeartbeat? _heartbeat;
     private bool _disposed;
     private volatile ConnectionState _state = ConnectionState.Closed;
+    private volatile DisconnectReason _disconnectReason;
 
     /// <summary>Tracks bytes sent/received and connection uptime.</summary>
     public ConnectionMetrics Metrics { get; private set; } = new();
 
     /// <summary>Current connection state.</summary>
     public ConnectionState State => _state;
+
+    /// <summary>The reason the last connection was closed.</summary>
+    internal DisconnectReason DisconnectReason => _disconnectReason;
 
     /// <summary>The remote server's endpoint.</summary>
     public EndPoint? RemoteEndPoint { get; private set; }
@@ -92,6 +96,7 @@ public class StormWebSocketClient : IAsyncDisposable
     private async Task ConnectCoreAsync(CancellationToken ct)
     {
         _state = ConnectionState.Connecting;
+        _disconnectReason = DisconnectReason.None;
         Metrics = new ConnectionMetrics();
 
         Uri uri = _options.Uri;
@@ -177,7 +182,11 @@ public class StormWebSocketClient : IAsyncDisposable
                     writer => WsFrameEncoder.WriteMaskedPing(writer), cancellationToken: ct2),
                 _options.Heartbeat.PingInterval,
                 _options.Heartbeat.MaxMissedPongs);
-            _heartbeat.OnTimeout = async () => await DisconnectAsync().ConfigureAwait(false);
+            _heartbeat.OnTimeout = async () =>
+            {
+                _disconnectReason = DisconnectReason.HeartbeatTimeout;
+                await DisconnectAsync().ConfigureAwait(false);
+            };
             _heartbeat.Start();
         }
 
@@ -241,6 +250,7 @@ public class StormWebSocketClient : IAsyncDisposable
                 }
                 catch (WsProtocolException ex)
                 {
+                    _disconnectReason = DisconnectReason.ProtocolError;
                     await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedClose(writer, ex.CloseStatus), cancellationToken: ct);
                     await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
                     if (OnError is not null)
@@ -262,6 +272,8 @@ public class StormWebSocketClient : IAsyncDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            if (_disconnectReason == DisconnectReason.None)
+                _disconnectReason = DisconnectReason.TransportError;
             await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
             if (OnError is not null)
             {
@@ -270,6 +282,10 @@ public class StormWebSocketClient : IAsyncDisposable
         }
         finally
         {
+            // Default: if no specific reason was set, the server closed the connection
+            if (_disconnectReason == DisconnectReason.None)
+                _disconnectReason = DisconnectReason.ClosedByServer;
+
             _state = ConnectionState.Closed;
 
             if (_heartbeat is not null)
@@ -278,10 +294,11 @@ public class StormWebSocketClient : IAsyncDisposable
                 _heartbeat = null;
             }
 
-            await _pipeline.OnDisconnectedAsync(sessionAdapter).ConfigureAwait(false);
+            DisconnectReason reason = _disconnectReason;
+            await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
             if (OnDisconnected is not null)
             {
-                await OnDisconnected.Invoke().ConfigureAwait(false);
+                await OnDisconnected.Invoke(reason).ConfigureAwait(false);
             }
 
             if (_transport is not null)
@@ -329,6 +346,8 @@ public class StormWebSocketClient : IAsyncDisposable
                 break;
 
             case WsOpCode.Close:
+                _disconnectReason = DisconnectReason.ClosedByServer;
+
                 WsCloseStatus closeStatus = WsCloseStatus.NormalClosure;
                 if (frame.Payload.Length >= 2)
                 {

@@ -12,10 +12,12 @@ public sealed class TcpSession : ISession
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
     private volatile ConnectionState _state;
+    private int _disconnectReason;
     private int _closeGuard;
 
     public long Id { get; }
     public ConnectionState State => _state;
+    public DisconnectReason DisconnectReason => (DisconnectReason)_disconnectReason;
     public ConnectionMetrics Metrics { get; } = new();
     public EndPoint? RemoteEndPoint { get; }
     public bool IsBackpressured => _connection.IsBackpressured;
@@ -43,11 +45,21 @@ public sealed class TcpSession : ISession
 
         if (policy == SlowConsumerPolicy.Disconnect)
         {
-            _connection.OnBackpressureDetected = () => _ = CloseAsync();
+            _connection.OnBackpressureDetected = () =>
+            {
+                SetDisconnectReason(DisconnectReason.SlowConsumer);
+                _ = CloseAsync();
+            };
         }
     }
 
     internal void SetState(ConnectionState state) => _state = state;
+
+    /// <summary>Sets the disconnect reason. Only the first call wins (no overwrite).</summary>
+    internal void SetDisconnectReason(DisconnectReason reason)
+    {
+        Interlocked.CompareExchange(ref _disconnectReason, (int)reason, (int)DisconnectReason.None);
+    }
 
     public ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
@@ -60,6 +72,7 @@ public sealed class TcpSession : ISession
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
             {
+                SetDisconnectReason(DisconnectReason.SlowConsumer);
                 _ = CloseAsync(cancellationToken);
             }
 
@@ -89,6 +102,7 @@ public sealed class TcpSession : ISession
             return;
         }
 
+        SetDisconnectReason(DisconnectReason.ClosedByServer);
         _state = ConnectionState.Closing;
         await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
         _state = ConnectionState.Closed;
@@ -101,6 +115,7 @@ public sealed class TcpSession : ISession
             return;
         }
 
+        SetDisconnectReason(DisconnectReason.Aborted);
         _state = ConnectionState.Closing;
         _ = _transport.CloseAsync();
     }
