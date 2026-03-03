@@ -41,7 +41,7 @@ namespace StormSocket.WebSocket;
 /// </summary>
 public enum WsOpCode : byte
 {
-    Continuation = 0x0, // %x0 denotes a continuation frame. (ignored for now)
+    Continuation = 0x0, // %x0 denotes a continuation frame
     Text = 0x1, // %x1 denotes a text frame
     Binary = 0x2, // %x2 denotes a binary frame
     Close = 0x8, // %x8 denotes a connection close

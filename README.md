@@ -48,6 +48,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
   - [TCP Keep-Alive Fine-Tuning](#tcp-keep-alive-fine-tuning)
   - [Slow Consumer Detection](#slow-consumer-detection)
   - [Rate Limiting](#rate-limiting)
+  - [Message Fragmentation](#message-fragmentation)
   - [Disconnect Reasons](#disconnect-reasons)
   - [Closing Connections: CloseAsync vs Abort](#closing-connections-closeasync-vs-abort)
   - [Backpressure & Buffer Limits](#backpressure--buffer-limits)
@@ -82,7 +83,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 # Features
 - **Event-based API** - no subclassing, just `server.OnDataReceived += handler`
 - **TCP Server & Client** with optional message framing (raw, length-prefix, delimiter)
-- **WebSocket Server & Client** with full RFC 6455 compliance (text, binary, ping/pong, close, client-side masking)
+- **WebSocket Server & Client** with full RFC 6455 compliance (text, binary, ping/pong, close, fragmentation/continuation frames, client-side masking)
 - **SSL/TLS** as a simple configuration option on any server or client
 - **Auto-reconnect** - clients automatically reconnect on disconnect with configurable delay and max attempts
 - **System.IO.Pipelines** for zero-copy I/O with built-in backpressure
@@ -100,6 +101,7 @@ Most .NET networking libraries use raw byte arrays with manual buffer management
 - **TCP Keep-Alive** - enabled by default with fine-tuning options (idle time, probe interval, probe count) to detect dead connections faster than OS defaults
 - **Connection timeout** - configurable timeout for client connections
 - **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`)
+- **Message fragmentation** - automatic reassembly of fragmented WebSocket messages (RFC 6455 Section 5.4) with `MaxMessageSize` limit and send-side fragmentation helpers
 - **Handshake timeout** - configurable timeout for WebSocket upgrade, closes idle TCP connections that never send an upgrade request (DoS protection)
 - **Socket error handling** - proper SocketError filtering (ConnectionReset, Abort, etc.)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
@@ -798,6 +800,46 @@ The `OnExceeded` event fires on every rate limit hit (regardless of action), so 
 
 > **Using .NET's built-in rate limiting?** The `IConnectionMiddleware` interface is your extension point — you can create your own middleware wrapping `System.Threading.RateLimiting` (TokenBucketRateLimiter, SlidingWindowRateLimiter, etc.) without any extra dependencies from StormSocket.
 
+## Message Fragmentation
+
+StormSocket fully supports WebSocket message fragmentation ([RFC 6455 Section 5.4](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.4)). Fragmented messages are automatically reassembled — your `OnMessageReceived` handler always receives the complete message.
+
+**Receiving fragmented messages** requires zero code changes. The server and client transparently reassemble fragments:
+
+```
+Client sends: [Text FIN=0 "Hello "] → [Continuation FIN=1 "World"]
+Server receives: OnMessageReceived with "Hello World"
+```
+
+Control frames (Ping/Pong/Close) can be interleaved between fragments per the RFC — they are handled normally while reassembly continues.
+
+**Sending fragmented messages** is available via the encoder:
+
+```csharp
+// Server-side: split a large message into 4KB fragments
+await session.WriteFrameAsync(writer =>
+    WsFrameEncoder.WriteFragmented(writer, WsOpCode.Text, largePayload, fragmentSize: 4096));
+
+// Client-side: masked fragments
+await client.WriteFrameAsync(writer =>
+    WsFrameEncoder.WriteMaskedFragmented(writer, WsOpCode.Binary, data, fragmentSize: 4096));
+```
+
+**`MaxMessageSize`** limits the total reassembled message size (default: 4 MB). If exceeded, the connection is closed with `MessageTooBig` (1009):
+
+```csharp
+WebSocket = new WebSocketOptions
+{
+    MaxFrameSize = 1024 * 1024,   // 1 MB per frame
+    MaxMessageSize = 4 * 1024 * 1024, // 4 MB total across fragments
+}
+```
+
+**Protocol violations** are automatically detected and close the connection with `ProtocolError` (1002):
+- Continuation frame without a preceding data frame
+- New data frame while a fragmented message is in progress
+- Fragmented control frame (control frames must not be fragmented)
+
 ## Disconnect Reasons
 
 Every `OnDisconnected` event includes a `DisconnectReason` explaining **why** the connection was closed. No more guessing from logs.
@@ -949,6 +991,7 @@ StormSocket WsServer running on ws://0.0.0.0:8080
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `MaxFrameSize` | `int` | `1048576` | Maximum frame payload (bytes). Oversized frames trigger close with `MessageTooBig` |
+| `MaxMessageSize` | `int` | `4194304` | Maximum reassembled message size across all fragments (bytes). Exceeded = close with `MessageTooBig` |
 | `AllowedOrigins` | `IReadOnlyList<string>?` | `null` | Allowed origins for CSWSH protection (RFC 6455 #10.2). `null` = allow all |
 | `HandshakeTimeout` | `TimeSpan` | `5s` | Max time for client to complete WebSocket upgrade after TCP connect. Prevents DoS via idle connections |
 | `Heartbeat` | `HeartbeatOptions` | `new()` | Ping/pong heartbeat and dead connection detection settings |
@@ -971,6 +1014,7 @@ StormSocket WsServer running on ws://0.0.0.0:8080
 | `Uri` | `Uri` | `ws://localhost:8080` | WebSocket URI (`ws://` or `wss://`) |
 | `ConnectTimeout` | `TimeSpan` | `10s` | Connection timeout |
 | `MaxFrameSize` | `int` | `1048576` | Maximum frame payload (bytes) |
+| `MaxMessageSize` | `int` | `4194304` | Maximum reassembled message size across all fragments (bytes) |
 | `Headers` | `Dictionary<string, string>?` | `null` | Extra HTTP headers for upgrade |
 | `Ssl` | `ClientSslOptions?` | `null` | SSL/TLS configuration |
 | `Socket` | `SocketTuningOptions` | `new()` | Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits) |
@@ -1184,7 +1228,7 @@ Client connects
     ├─ Middleware.OnConnectedAsync
     ├─ OnConnected event
     │
-    ├─ Read loop (receives frames/data, dispatches events)
+    ├─ Read loop (decodes frames, reassembles fragments, dispatches events)
     ├─ Heartbeat loop (sends Pings, tracks Pongs) [concurrent]
     │
     ├─ Connection closes (client disconnect / timeout / kick)

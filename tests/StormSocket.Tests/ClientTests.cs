@@ -684,4 +684,170 @@ public class ClientTests
             await server.StopAsync();
         }
     }
+
+    /// <summary>Writes a masked WebSocket frame to a NetworkStream.</summary>
+    private static async Task WriteRawMaskedFrame(System.Net.Sockets.NetworkStream stream, WsOpCode opCode, byte[] payload, bool fin)
+    {
+        Pipe pipe = new();
+        WsFrameEncoder.WriteMaskedFrame(pipe.Writer, opCode, payload, fin);
+        await pipe.Writer.FlushAsync();
+        pipe.Writer.Complete();
+        ReadResult result = await pipe.Reader.ReadAsync();
+        byte[] bytes = result.Buffer.ToArray();
+        pipe.Reader.Complete();
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
+    }
+
+    [Fact]
+    public async Task WsServer_FragmentedMessage_Reassembled()
+    {
+        int port = GetPort();
+        TaskCompletionSource<string> received = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            },
+        });
+        server.OnMessageReceived += async (_, msg) => received.TrySetResult(msg.Text);
+        await server.StartAsync();
+
+        try
+        {
+            (System.Net.Sockets.TcpClient raw, System.Net.Sockets.NetworkStream stream) = await ConnectRawWebSocket(port);
+            using System.Net.Sockets.TcpClient client = raw;
+
+            // Send fragmented: Text(FIN=0, "Hello ") + Continuation(FIN=1, "World")
+            await WriteRawMaskedFrame(stream, WsOpCode.Text, "Hello "u8.ToArray(), fin: false);
+            await WriteRawMaskedFrame(stream, WsOpCode.Continuation, "World"u8.ToArray(), fin: true);
+
+            string result = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("Hello World", result);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_ControlFrameBetweenFragments_Works()
+    {
+        int port = GetPort();
+        TaskCompletionSource<string> received = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            },
+        });
+        server.OnMessageReceived += async (_, msg) => received.TrySetResult(msg.Text);
+        await server.StartAsync();
+
+        try
+        {
+            (System.Net.Sockets.TcpClient raw, System.Net.Sockets.NetworkStream stream) = await ConnectRawWebSocket(port);
+            using System.Net.Sockets.TcpClient client = raw;
+
+            // Fragment 1
+            await WriteRawMaskedFrame(stream, WsOpCode.Text, "Hello "u8.ToArray(), fin: false);
+
+            // Ping in the middle (server should auto-pong)
+            await WriteRawMaskedFrame(stream, WsOpCode.Ping, Array.Empty<byte>(), fin: true);
+
+            // Read the pong response
+            byte[] buf = new byte[128];
+            int read = await stream.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(read > 0); // got pong back
+
+            // Final fragment
+            await WriteRawMaskedFrame(stream, WsOpCode.Continuation, "World"u8.ToArray(), fin: true);
+
+            string result = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("Hello World", result);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_InvalidContinuation_ProtocolError()
+    {
+        int port = GetPort();
+        TaskCompletionSource<Exception> errorReceived = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            },
+        });
+        server.OnError += async (_, ex) => errorReceived.TrySetResult(ex);
+        await server.StartAsync();
+
+        try
+        {
+            (System.Net.Sockets.TcpClient raw, System.Net.Sockets.NetworkStream stream) = await ConnectRawWebSocket(port);
+            using System.Net.Sockets.TcpClient client = raw;
+
+            // Send continuation without prior data frame
+            await WriteRawMaskedFrame(stream, WsOpCode.Continuation, "bad"u8.ToArray(), fin: true);
+
+            Exception error = await errorReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsType<WsProtocolException>(error);
+            Assert.Equal(WsCloseStatus.ProtocolError, ((WsProtocolException)error).CloseStatus);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_MaxMessageSize_Exceeded()
+    {
+        int port = GetPort();
+        TaskCompletionSource<Exception> errorReceived = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                MaxMessageSize = 100,
+            },
+        });
+        server.OnError += async (_, ex) => errorReceived.TrySetResult(ex);
+        await server.StartAsync();
+
+        try
+        {
+            (System.Net.Sockets.TcpClient raw, System.Net.Sockets.NetworkStream stream) = await ConnectRawWebSocket(port);
+            using System.Net.Sockets.TcpClient client = raw;
+
+            // Send fragments exceeding MaxMessageSize=100
+            await WriteRawMaskedFrame(stream, WsOpCode.Binary, new byte[80], fin: false);
+            await WriteRawMaskedFrame(stream, WsOpCode.Continuation, new byte[80], fin: true);
+
+            Exception error = await errorReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsType<WsProtocolException>(error);
+            Assert.Equal(WsCloseStatus.MessageTooBig, ((WsProtocolException)error).CloseStatus);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
 }

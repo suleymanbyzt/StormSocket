@@ -127,4 +127,54 @@ public static class WsFrameEncoder
         BinaryPrimitives.WriteUInt16BigEndian(payload, (ushort)status);
         WriteMaskedFrame(writer, WsOpCode.Close, payload);
     }
+
+    /// <summary>
+    /// Writes a message as fragmented frames if the payload exceeds <paramref name="fragmentSize"/>,
+    /// otherwise writes a single frame. Server-side (unmasked).
+    /// </summary>
+    public static void WriteFragmented(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, int fragmentSize)
+    {
+        if (payload.Length <= fragmentSize)
+        {
+            WriteFrame(writer, opCode, payload, fin: true);
+            return;
+        }
+
+        int offset = 0;
+        bool first = true;
+        while (offset < payload.Length)
+        {
+            int chunkSize = Math.Min(fragmentSize, payload.Length - offset);
+            bool isLast = (offset + chunkSize) >= payload.Length;
+            WsOpCode chunkOpCode = first ? opCode : WsOpCode.Continuation;
+            WriteFrame(writer, chunkOpCode, payload.Slice(offset, chunkSize), fin: isLast);
+            offset += chunkSize;
+            first = false;
+        }
+    }
+
+    /// <summary>
+    /// Writes a message as fragmented masked frames if the payload exceeds <paramref name="fragmentSize"/>,
+    /// otherwise writes a single masked frame. Client-side (masked).
+    /// </summary>
+    public static void WriteMaskedFragmented(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, int fragmentSize)
+    {
+        if (payload.Length <= fragmentSize)
+        {
+            WriteMaskedFrame(writer, opCode, payload, fin: true);
+            return;
+        }
+
+        int offset = 0;
+        bool first = true;
+        while (offset < payload.Length)
+        {
+            int chunkSize = Math.Min(fragmentSize, payload.Length - offset);
+            bool isLast = (offset + chunkSize) >= payload.Length;
+            WsOpCode chunkOpCode = first ? opCode : WsOpCode.Continuation;
+            WriteMaskedFrame(writer, chunkOpCode, payload.Slice(offset, chunkSize), fin: isLast);
+            offset += chunkSize;
+            first = false;
+        }
+    }
 }
