@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using StormSocket.Core;
 using StormSocket.Framing;
 
@@ -59,4 +60,17 @@ public sealed class ServerOptions
 
     /// <summary>Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits).</summary>
     public SocketTuningOptions Socket { get; init; } = new();
+
+    /// <summary>
+    /// Optional logger factory for structured logging. Null = no logging (zero overhead).
+    /// <example>
+    /// <code>
+    /// var server = new StormTcpServer(new ServerOptions
+    /// {
+    ///     LoggerFactory = LoggerFactory.Create(b => b.AddConsole()),
+    /// });
+    /// </code>
+    /// </example>
+    /// </summary>
+    public ILoggerFactory? LoggerFactory { get; init; }
 }

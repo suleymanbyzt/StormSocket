@@ -3,6 +3,8 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Middleware;
@@ -30,6 +32,7 @@ public class StormWebSocketServer : IAsyncDisposable
 {
     private readonly ServerOptions _options;
     private readonly WebSocketOptions _wsOptions;
+    private readonly ILogger _logger;
     private Socket? _listenSocket;
     private CancellationTokenSource? _cts;
     private Task? _acceptTask;
@@ -130,6 +133,7 @@ public class StormWebSocketServer : IAsyncDisposable
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _wsOptions = options.WebSocket ?? new WebSocketOptions();
+        _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormWebSocketServer>();
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
@@ -165,6 +169,7 @@ public class StormWebSocketServer : IAsyncDisposable
         _listenSocket.Listen(_options.Backlog);
 
         _acceptTask = AcceptLoopAsync(_cts.Token);
+        _logger.LogInformation("WebSocket server listening on {EndPoint}", bindEndPoint);
         return Task.CompletedTask;
     }
 
@@ -214,6 +219,7 @@ public class StormWebSocketServer : IAsyncDisposable
         }
 
         await Sessions.CloseAllAsync().ConfigureAwait(false);
+        _logger.LogInformation("WebSocket server stopped, {Count} sessions closed", Sessions.Count);
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -233,14 +239,16 @@ public class StormWebSocketServer : IAsyncDisposable
             {
                 break;
             }
-            catch (SocketException)
+            catch (SocketException ex)
             {
+                _logger.LogWarning(ex, "Accept loop terminated");
                 break;
             }
 
             // Enforce max connections limit
             if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
             {
+                _logger.LogDebug("Connection rejected: max connections ({MaxConnections}) reached", _options.MaxConnections);
                 clientSocket.Close();
                 continue;
             }
@@ -288,6 +296,7 @@ public class StormWebSocketServer : IAsyncDisposable
             session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
             using WsFragmentAssembler assembler = new(_wsOptions.MaxMessageSize);
             Sessions.TryAdd(session);
+            _logger.LogDebug("Session {SessionId} connected from {RemoteEndPoint}", id, socket.RemoteEndPoint);
 
             // Route socket errors to the server's OnError event
             if (transport is TcpTransport tcp)
@@ -302,9 +311,11 @@ public class StormWebSocketServer : IAsyncDisposable
                     sendPing: async ct2 => await session.WriteFrameAsync(
                         writer => WsFrameEncoder.WritePing(writer), cancellationToken: ct2),
                     _wsOptions.Heartbeat.PingInterval,
-                    _wsOptions.Heartbeat.MaxMissedPongs);
+                    _wsOptions.Heartbeat.MaxMissedPongs,
+                    _logger);
                 heartbeat.OnTimeout = async () =>
                 {
+                    _logger.LogWarning("Session {SessionId} heartbeat timeout", session.Id);
                     session.SetDisconnectReason(DisconnectReason.HeartbeatTimeout);
                     await session.CloseAsync(ct).ConfigureAwait(false);
                 };
@@ -328,6 +339,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 session.SetDisconnectReason(ex is OperationCanceledException
                     ? DisconnectReason.HandshakeTimeout
                     : DisconnectReason.TransportError);
+                _logger.LogError(ex, "Session {SessionId} error", session.Id);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
             }
 
@@ -348,6 +360,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 Groups.RemoveFromAll(session);
 
                 DisconnectReason reason = session.DisconnectReason;
+                _logger.LogDebug("Session {SessionId} disconnected: {Reason}", session.Id, reason);
                 await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
 
                 if (OnDisconnected is not null)
@@ -473,6 +486,7 @@ public class StormWebSocketServer : IAsyncDisposable
             }
             catch (WsProtocolException ex)
             {
+                _logger.LogWarning(ex, "Session {SessionId} protocol error", session.Id);
                 session.SetDisconnectReason(DisconnectReason.ProtocolError);
                 WsCloseStatus status = ex.CloseStatus;
                 await session.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, status), cancellationToken: ct);

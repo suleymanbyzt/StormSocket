@@ -4,6 +4,8 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Middleware;
@@ -30,6 +32,7 @@ namespace StormSocket.Client;
 public class StormWebSocketClient : IAsyncDisposable
 {
     private readonly WsClientOptions _options;
+    private readonly ILogger _logger;
     private readonly MiddlewarePipeline _pipeline = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private ITransport? _transport;
@@ -70,6 +73,7 @@ public class StormWebSocketClient : IAsyncDisposable
     public StormWebSocketClient(WsClientOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormWebSocketClient>();
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
@@ -95,6 +99,7 @@ public class StormWebSocketClient : IAsyncDisposable
 
     private async Task ConnectCoreAsync(CancellationToken ct)
     {
+        _logger.LogInformation("Connecting to {Uri}", _options.Uri);
         _state = ConnectionState.Connecting;
         _disconnectReason = DisconnectReason.None;
         Metrics = new ConnectionMetrics();
@@ -174,6 +179,7 @@ public class StormWebSocketClient : IAsyncDisposable
 
         _transport = transport;
         _state = ConnectionState.Connected;
+        _logger.LogInformation("Connected to {Uri}", _options.Uri);
 
         if (_options.Heartbeat.PingInterval > TimeSpan.Zero)
         {
@@ -181,9 +187,11 @@ public class StormWebSocketClient : IAsyncDisposable
                 sendPing: async ct2 => await WriteFrameAsync(
                     writer => WsFrameEncoder.WriteMaskedPing(writer), cancellationToken: ct2),
                 _options.Heartbeat.PingInterval,
-                _options.Heartbeat.MaxMissedPongs);
+                _options.Heartbeat.MaxMissedPongs,
+                _logger);
             _heartbeat.OnTimeout = async () =>
             {
+                _logger.LogWarning("Heartbeat timeout");
                 _disconnectReason = DisconnectReason.HeartbeatTimeout;
                 await DisconnectAsync().ConfigureAwait(false);
             };
@@ -262,6 +270,7 @@ public class StormWebSocketClient : IAsyncDisposable
                 }
                 catch (WsProtocolException ex)
                 {
+                    _logger.LogWarning(ex, "Protocol error");
                     _disconnectReason = DisconnectReason.ProtocolError;
                     await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedClose(writer, ex.CloseStatus), cancellationToken: ct);
                     await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
@@ -286,6 +295,7 @@ public class StormWebSocketClient : IAsyncDisposable
         {
             if (_disconnectReason == DisconnectReason.None)
                 _disconnectReason = DisconnectReason.TransportError;
+            _logger.LogError(ex, "Transport error");
             await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
             if (OnError is not null)
             {
@@ -307,6 +317,7 @@ public class StormWebSocketClient : IAsyncDisposable
             }
 
             DisconnectReason reason = _disconnectReason;
+            _logger.LogInformation("Disconnected: {Reason}", reason);
             await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
             if (OnDisconnected is not null)
             {
@@ -510,11 +521,13 @@ public class StormWebSocketClient : IAsyncDisposable
             attempt++;
             if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
             {
+                _logger.LogWarning("Max reconnect attempts ({MaxAttempts}) reached", _options.Reconnect.MaxAttempts);
                 firstConnect?.TrySetException(new InvalidOperationException(
                     $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded."));
                 break;
             }
 
+            _logger.LogDebug("Reconnect attempt {Attempt} in {Delay}", attempt, _options.Reconnect.Delay);
             if (OnReconnecting is not null)
             {
                 await OnReconnecting.Invoke(attempt, _options.Reconnect.Delay).ConfigureAwait(false);
@@ -530,8 +543,8 @@ public class StormWebSocketClient : IAsyncDisposable
             }
         }
     }
-    
-    
+
+
 
     /// <summary>Gracefully disconnects, sending a Close frame.</summary>
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)

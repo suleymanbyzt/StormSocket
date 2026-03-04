@@ -486,3 +486,50 @@ var server = new StormTcpServer(new ServerOptions
 - **Receive buffer full**: Socket reads pause until the application processes buffered messages. The OS TCP window handles flow control upstream.
 
 Set to `0` for unlimited (not recommended for production).
+
+## Logging
+
+StormSocket supports structured logging via `Microsoft.Extensions.Logging`. Pass an `ILoggerFactory` through options — if omitted, logging is completely disabled with zero overhead.
+
+```csharp
+using Microsoft.Extensions.Logging;
+
+var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.AddConsole();
+    builder.SetMinimumLevel(LogLevel.Debug);
+});
+
+var server = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+    LoggerFactory = loggerFactory,
+});
+```
+
+**Log levels:**
+
+| Level | What gets logged |
+|---|---|
+| `Information` | Server start/stop, client connect/disconnect |
+| `Warning` | Heartbeat timeout, protocol errors, rate limit exceeded, max reconnect attempts |
+| `Error` | Transport errors, handshake failures |
+| `Debug` | Session connect/disconnect with details, reconnect attempts, max connections rejected |
+
+Works on both servers and clients:
+
+```csharp
+var client = new StormWebSocketClient(new WsClientOptions
+{
+    Uri = new Uri("ws://localhost:8080"),
+    LoggerFactory = loggerFactory,
+});
+```
+
+The `RateLimitMiddleware` also accepts an optional `ILogger`:
+
+```csharp
+var rateLimiter = new RateLimitMiddleware(
+    new RateLimitOptions { MaxMessages = 100 },
+    logger: loggerFactory.CreateLogger<RateLimitMiddleware>());
+```

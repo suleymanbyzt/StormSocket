@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Logging;
 using StormSocket.Core;
 using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
@@ -6,9 +7,16 @@ using StormSocket.Samples.WsServer.Handlers;
 using StormSocket.Samples.WsServer.Middleware;
 using StormSocket.Samples.WsServer.Services;
 
+using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.AddConsole();
+    builder.SetMinimumLevel(LogLevel.Debug);
+});
+
 StormWebSocketServer server = new(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+    LoggerFactory = loggerFactory,
     Backlog = 128,
     ReceiveBufferSize = 1024 * 64,
     SendBufferSize = 1024 * 64,
@@ -47,7 +55,7 @@ RateLimitMiddleware rateLimiter = new(new RateLimitOptions
     MaxMessages = 5,
     Scope = RateLimitScope.Session,
     ExceededAction = RateLimitAction.Disconnect,
-});
+}, loggerFactory.CreateLogger<RateLimitMiddleware>());
 
 server.UseMiddleware(rateLimiter);
 server.UseMiddleware(new LoggingMiddleware());

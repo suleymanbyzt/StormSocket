@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using StormSocket.Core;
 
 namespace StormSocket.Client;
@@ -37,4 +38,7 @@ public sealed class WsClientOptions
 
     /// <summary>Auto-reconnect settings.</summary>
     public ReconnectOptions Reconnect { get; init; } = new();
+
+    /// <summary>Optional logger factory for structured logging. Null = no logging (zero overhead).</summary>
+    public ILoggerFactory? LoggerFactory { get; init; }
 }
