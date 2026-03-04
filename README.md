@@ -44,7 +44,8 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Handshake timeout** - configurable timeout for WebSocket upgrade (DoS protection)
 - **TCP Keep-Alive** - fine-tuning options (idle time, probe interval, probe count)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
-- **Zero dependencies** beyond `System.IO.Pipelines`
+- **Structured logging** via `ILoggerFactory` — zero overhead when disabled, structured output when enabled
+- **Zero dependencies** beyond `System.IO.Pipelines` and `Microsoft.Extensions.Logging.Abstractions`
 
 # Quick Start
 

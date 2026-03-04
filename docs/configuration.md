@@ -15,6 +15,7 @@
 | `WebSocket` | `WebSocketOptions?` | `null` | WebSocket settings (only for StormWebSocketServer) |
 | `Framer` | `IMessageFramer?` | `null` | Message framing strategy (null = raw bytes) |
 | `Socket` | `SocketTuningOptions` | `new()` | Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits) |
+| `LoggerFactory` | `ILoggerFactory?` | `null` | Logger factory for structured logging. Null = no logging (zero overhead) |
 
 ## WebSocketOptions
 
@@ -36,6 +37,7 @@
 | `ConnectTimeout` | `TimeSpan` | `10s` | Connection timeout |
 | `Socket` | `SocketTuningOptions` | `new()` | Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits) |
 | `Reconnect` | `ReconnectOptions` | `new()` | Auto-reconnect settings |
+| `LoggerFactory` | `ILoggerFactory?` | `null` | Logger factory for structured logging. Null = no logging (zero overhead) |
 
 ## WsClientOptions
 
@@ -50,6 +52,7 @@
 | `Socket` | `SocketTuningOptions` | `new()` | Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits) |
 | `Heartbeat` | `HeartbeatOptions` | `new()` | Ping/pong heartbeat and dead connection detection settings |
 | `Reconnect` | `ReconnectOptions` | `new()` | Auto-reconnect settings |
+| `LoggerFactory` | `ILoggerFactory?` | `null` | Logger factory for structured logging. Null = no logging (zero overhead) |
 
 ## SocketTuningOptions
 

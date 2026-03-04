@@ -12,7 +12,7 @@
 
     <!-- NuGet Package -->
     <PackageId>StormSocket</PackageId>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Authors>suleymanbyzt</Authors>
     <Description>Modern, high-performance, event-based TCP/WebSocket/SSL library for .NET built on System.IO.Pipelines. Zero subclassing — just subscribe to events and go.</Description>
     <PackageTags>tcp;websocket;ssl;tls;server;client;socket;networking;high-performance;pipelines</PackageTags>
@@ -30,6 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
   </ItemGroup>
 

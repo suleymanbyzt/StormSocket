@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Framing;
@@ -25,6 +27,7 @@ namespace StormSocket.Client;
 public class StormTcpClient : IAsyncDisposable
 {
     private readonly ClientOptions _options;
+    private readonly ILogger _logger;
     private readonly MiddlewarePipeline _pipeline = new();
     private ITransport? _transport;
     private PipeConnection? _connection;
@@ -64,6 +67,7 @@ public class StormTcpClient : IAsyncDisposable
     public StormTcpClient(ClientOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormTcpClient>();
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
@@ -89,6 +93,7 @@ public class StormTcpClient : IAsyncDisposable
 
     private async Task ConnectCoreAsync(CancellationToken ct)
     {
+        _logger.LogInformation("Connecting to {EndPoint}", _options.EndPoint);
         _state = ConnectionState.Connecting;
         _disconnectReason = DisconnectReason.None;
         Metrics = new ConnectionMetrics();
@@ -171,6 +176,7 @@ public class StormTcpClient : IAsyncDisposable
 
         _transport = transport;
         _state = ConnectionState.Connected;
+        _logger.LogInformation("Connected to {EndPoint}", _options.EndPoint);
 
         await _pipeline.OnConnectedAsync(sessionAdapter).ConfigureAwait(false);
         if (OnConnected is not null)
@@ -190,6 +196,7 @@ public class StormTcpClient : IAsyncDisposable
         {
             if (_disconnectReason == DisconnectReason.None)
                 _disconnectReason = DisconnectReason.TransportError;
+            _logger.LogError(ex, "Transport error");
             await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
             if (OnError is not null)
             {
@@ -205,6 +212,7 @@ public class StormTcpClient : IAsyncDisposable
             _state = ConnectionState.Closed;
 
             DisconnectReason reason = _disconnectReason;
+            _logger.LogInformation("Disconnected: {Reason}", reason);
             await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
             if (OnDisconnected is not null)
             {
@@ -257,11 +265,13 @@ public class StormTcpClient : IAsyncDisposable
             attempt++;
             if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
             {
+                _logger.LogWarning("Max reconnect attempts ({MaxAttempts}) reached", _options.Reconnect.MaxAttempts);
                 firstConnect?.TrySetException(new InvalidOperationException(
                     $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded."));
                 break;
             }
 
+            _logger.LogDebug("Reconnect attempt {Attempt} in {Delay}", attempt, _options.Reconnect.Delay);
             if (OnReconnecting is not null)
             {
                 await OnReconnecting.Invoke(attempt, _options.Reconnect.Delay).ConfigureAwait(false);

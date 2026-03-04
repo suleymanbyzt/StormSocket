@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace StormSocket.WebSocket;
 
 /// <summary>
@@ -10,6 +12,7 @@ public sealed class WsHeartbeat : IAsyncDisposable
     private readonly Func<CancellationToken, ValueTask> _sendPing;
     private readonly TimeSpan _interval;
     private readonly int _missedPongsAllowed;
+    private readonly ILogger? _logger;
     private readonly CancellationTokenSource _cts = new();
     private Task? _task;
     private bool _disposed;
@@ -29,11 +32,12 @@ public sealed class WsHeartbeat : IAsyncDisposable
     /// <param name="sendPing">
     /// Callback that sends a Ping frame through the session's write lock.
     /// </param>
-    public WsHeartbeat(Func<CancellationToken, ValueTask> sendPing, TimeSpan interval, int missedPongsAllowed = 3)
+    public WsHeartbeat(Func<CancellationToken, ValueTask> sendPing, TimeSpan interval, int missedPongsAllowed = 3, ILogger? logger = null)
     {
         _sendPing = sendPing;
         _interval = interval;
         _missedPongsAllowed = missedPongsAllowed;
+        _logger = logger;
     }
 
     public void Start()
@@ -74,7 +78,10 @@ public sealed class WsHeartbeat : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Heartbeat error");
         }
     }
 

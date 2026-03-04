@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Framing;
@@ -22,6 +24,7 @@ namespace StormSocket.Server;
 public class StormTcpServer : IAsyncDisposable
 {
     private readonly ServerOptions _options;
+    private readonly ILogger _logger;
     private Socket? _listenSocket;
     private CancellationTokenSource? _cts;
     private Task? _acceptTask;
@@ -96,6 +99,7 @@ public class StormTcpServer : IAsyncDisposable
     public StormTcpServer(ServerOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormTcpServer>();
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
@@ -131,6 +135,7 @@ public class StormTcpServer : IAsyncDisposable
         _listenSocket.Listen(_options.Backlog);
 
         _acceptTask = AcceptLoopAsync(_cts.Token);
+        _logger.LogInformation("TCP server listening on {EndPoint}", bindEndPoint);
         return Task.CompletedTask;
     }
 
@@ -160,6 +165,7 @@ public class StormTcpServer : IAsyncDisposable
         }
 
         await Sessions.CloseAllAsync().ConfigureAwait(false);
+        _logger.LogInformation("TCP server stopped");
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -179,15 +185,16 @@ public class StormTcpServer : IAsyncDisposable
             {
                 break;
             }
-            catch (SocketException)
+            catch (SocketException ex)
             {
+                _logger.LogWarning(ex, "Accept loop terminated");
                 break;
             }
 
             // enforce max connections limit
             if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
             {
-                // it might be a good idea to notify the server here
+                _logger.LogDebug("Connection rejected: max connections ({MaxConnections}) reached", _options.MaxConnections);
                 clientSocket.Close();
                 continue;
             }
@@ -258,6 +265,7 @@ public class StormTcpServer : IAsyncDisposable
 
             session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
             Sessions.TryAdd(session);
+            _logger.LogDebug("Session {SessionId} connected from {RemoteEndPoint}", id, socket.RemoteEndPoint);
 
             // Route socket errors to the server's OnError event
             if (transport is TcpTransport tcp)
@@ -278,6 +286,7 @@ public class StormTcpServer : IAsyncDisposable
             if (session is not null)
             {
                 session.SetDisconnectReason(DisconnectReason.TransportError);
+                _logger.LogError(ex, "Session {SessionId} error", session.Id);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
             }
 
@@ -298,6 +307,7 @@ public class StormTcpServer : IAsyncDisposable
                 Groups.RemoveFromAll(session);
 
                 DisconnectReason reason = session.DisconnectReason;
+                _logger.LogDebug("Session {SessionId} disconnected: {Reason}", session.Id, reason);
                 await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
 
                 if (OnDisconnected is not null)

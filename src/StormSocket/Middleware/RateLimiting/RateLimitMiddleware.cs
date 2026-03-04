@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using Microsoft.Extensions.Logging;
 using StormSocket.Core;
 using StormSocket.Events;
 using StormSocket.Session;
@@ -28,6 +29,7 @@ namespace StormSocket.Middleware.RateLimiting;
 public sealed class RateLimitMiddleware : IConnectionMiddleware
 {
     private readonly RateLimitOptions _options;
+    private readonly ILogger? _logger;
     private readonly long _windowMs;
     private readonly ConcurrentDictionary<long, RateLimitEntry> _sessionEntries = new();
     private readonly ConcurrentDictionary<IPAddress, RateLimitEntry> _ipEntries = new();
@@ -38,9 +40,10 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
     /// </summary>
     public event SessionConnectedHandler? OnExceeded;
 
-    public RateLimitMiddleware(RateLimitOptions options)
+    public RateLimitMiddleware(RateLimitOptions options, ILogger? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger;
 
         if (options.Window <= TimeSpan.Zero)
         {
@@ -98,6 +101,8 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
 
     private async ValueTask<ReadOnlyMemory<byte>> HandleExceededAsync(ISession session)
     {
+        _logger?.LogWarning("Rate limit exceeded for session {SessionId}, action: {Action}", session.Id, _options.ExceededAction);
+
         if (OnExceeded is not null)
         {
             await OnExceeded.Invoke(session).ConfigureAwait(false);
