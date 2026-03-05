@@ -494,19 +494,42 @@ public class StormWebSocketClient : IAsyncDisposable
             throw new InvalidOperationException("Client is not connected.");
         }
 
-        byte[] bytes = Encoding.UTF8.GetBytes(text);
+        int byteCount = Encoding.UTF8.GetByteCount(text);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        int written = Encoding.UTF8.GetBytes(text, rented);
 
-        if (_deflate is not null && _deflate.ShouldCompress(bytes.Length))
+        if (_deflate is not null && _deflate.ShouldCompress(written))
         {
-            byte[] compressed = _deflate.Compress(bytes);
+            byte[] compressed = _deflate.Compress(rented.AsSpan(0, written));
+            ArrayPool<byte>.Shared.Return(rented);
             return WriteFrameAsync(
                 writer => WsFrameEncoder.WriteMaskedFrame(writer, WsOpCode.Text, compressed, rsv1: true),
                 compressed.Length, cancellationToken);
         }
 
-        return WriteFrameAsync(
-            writer => WsFrameEncoder.WriteMaskedText(writer, bytes),
-            bytes.Length, cancellationToken);
+        ValueTask task = WriteFrameAsync(
+            writer => WsFrameEncoder.WriteMaskedText(writer, rented.AsSpan(0, written)),
+            written, cancellationToken);
+
+        if (task.IsCompletedSuccessfully)
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+            return ValueTask.CompletedTask;
+        }
+
+        return ReturnBufferAfterWriteAsync(task, rented);
+    }
+
+    private static async ValueTask ReturnBufferAfterWriteAsync(ValueTask writeTask, byte[] rented)
+    {
+        try
+        {
+            await writeTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Sends a text WebSocket frame from pre-encoded UTF-8 bytes.</summary>

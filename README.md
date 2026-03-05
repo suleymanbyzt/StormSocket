@@ -20,7 +20,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 
 ## Why StormSocket?
 
-- **Pooled, allocation-free I/O** — `System.IO.Pipelines` manages buffer pools internally, no `new byte[]` per read
+- **Pooled I/O** — `System.IO.Pipelines` buffer pool + `ArrayPool` for send encoding, minimal GC pressure
 - **Backpressure that actually works** — configurable pipe thresholds, OS TCP window propagates upstream
 - **Subscribe, don't subclass** — `server.OnDataReceived += handler`, no inheritance chains
 - **SSL is a config flag** — same server, add `SslOptions`, done
