@@ -576,31 +576,41 @@ public class StormWebSocketServer : IAsyncDisposable
     /// <summary>Sends a text message to all connected WebSocket sessions concurrently. Optionally excludes one session.</summary>
     public async ValueTask BroadcastTextAsync(string text, long? excludeId = null, CancellationToken cancellationToken = default)
     {
-        byte[] data = Encoding.UTF8.GetBytes(text);
-        List<ValueTask> tasks = [];
-        foreach (ISession s in Sessions.All)
+        int byteCount = Encoding.UTF8.GetByteCount(text);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        int written = Encoding.UTF8.GetBytes(text, rented);
+        try
         {
-            if (s.Id == excludeId)
+            ReadOnlyMemory<byte> data = rented.AsMemory(0, written);
+            List<ValueTask> tasks = [];
+            foreach (ISession s in Sessions.All)
             {
-                continue;
+                if (s.Id == excludeId)
+                {
+                    continue;
+                }
+
+                if (s is WebSocketSession wss)
+                {
+                    tasks.Add(wss.SendTextAsync(data, cancellationToken));
+                }
             }
 
-            if (s is WebSocketSession wss)
+            foreach (ValueTask task in tasks)
             {
-                tasks.Add(wss.SendTextAsync(data, cancellationToken));
+                try
+                {
+                    await task.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // ignored
+                }
             }
         }
-
-        foreach (ValueTask task in tasks)
+        finally
         {
-            try
-            {
-                await task.ConfigureAwait(false);
-            }
-            catch
-            {
-                // ignored
-            }
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 
