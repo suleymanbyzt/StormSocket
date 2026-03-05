@@ -25,6 +25,7 @@ public sealed class WebSocketSession : ISession
     private int _disconnectReason;
     private int _closeGuard;
     private WsHeartbeat? _heartbeat;
+    private WsPerMessageDeflate? _deflate;
 
     public long Id { get; }
     public ConnectionState State => _state;
@@ -57,6 +58,13 @@ public sealed class WebSocketSession : ISession
     {
         _heartbeat = heartbeat;
     }
+
+    internal void SetCompression(WsPerMessageDeflate deflate)
+    {
+        _deflate = deflate;
+    }
+
+    internal WsPerMessageDeflate? Compression => _deflate;
 
     internal void SetState(ConnectionState state) => _state = state;
 
@@ -183,6 +191,15 @@ public sealed class WebSocketSession : ISession
             return ValueTask.CompletedTask;
         }
 
+        if (_deflate is not null && _deflate.ShouldCompress(data.Length))
+        {
+            byte[] compressed = _deflate.Compress(data.Span);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Binary, compressed, rsv1: true),
+                compressed.Length,
+                cancellationToken);
+        }
+
         return WriteFrameAsync(
             writer => WsFrameEncoder.WriteBinary(writer, data.Span),
             data.Length,
@@ -204,6 +221,16 @@ public sealed class WebSocketSession : ISession
         }
 
         byte[] bytes = Encoding.UTF8.GetBytes(text);
+
+        if (_deflate is not null && _deflate.ShouldCompress(bytes.Length))
+        {
+            byte[] compressed = _deflate.Compress(bytes);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, compressed, rsv1: true),
+                compressed.Length,
+                cancellationToken);
+        }
+
         return WriteFrameAsync(
             writer => WsFrameEncoder.WriteText(writer, bytes),
             bytes.Length,
@@ -222,6 +249,15 @@ public sealed class WebSocketSession : ISession
             }
 
             return ValueTask.CompletedTask;
+        }
+
+        if (_deflate is not null && _deflate.ShouldCompress(utf8Data.Length))
+        {
+            byte[] compressed = _deflate.Compress(utf8Data.Span);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, compressed, rsv1: true),
+                compressed.Length,
+                cancellationToken);
         }
 
         return WriteFrameAsync(
@@ -300,6 +336,7 @@ public sealed class WebSocketSession : ISession
             await _heartbeat.DisposeAsync().ConfigureAwait(false);
         }
 
+        _deflate?.Dispose();
         _writeLock.Dispose();
         await _transport.DisposeAsync().ConfigureAwait(false);
     }

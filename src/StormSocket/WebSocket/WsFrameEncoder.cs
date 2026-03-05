@@ -11,7 +11,7 @@ namespace StormSocket.WebSocket;
 /// </summary>
 public static class WsFrameEncoder
 {
-    public static void WriteFrame(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, bool fin = true)
+    public static void WriteFrame(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, bool fin = true, bool rsv1 = false)
     {
         int headerSize = 2;
         int payloadLength = payload.Length;
@@ -27,8 +27,8 @@ public static class WsFrameEncoder
 
         Span<byte> span = writer.GetSpan(headerSize + payloadLength);
 
-        // first byte: FIN + opcode
-        span[0] = (byte)((fin ? 0x80 : 0) | (int)opCode);
+        // first byte: FIN + RSV1 + opcode
+        span[0] = (byte)((fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | (int)opCode);
 
         // second byte: payload length (no mask for server frames)
         if (payloadLength <= 125)
@@ -65,7 +65,7 @@ public static class WsFrameEncoder
         WriteFrame(writer, WsOpCode.Close, payload);
     }
 
-    public static void WriteMaskedFrame(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, bool fin = true)
+    public static void WriteMaskedFrame(PipeWriter writer, WsOpCode opCode, ReadOnlySpan<byte> payload, bool fin = true, bool rsv1 = false)
     {
         int headerSize = 2 + 4; // +4 for mask key don't remove this
         int payloadLength = payload.Length;
@@ -81,7 +81,7 @@ public static class WsFrameEncoder
 
         Span<byte> span = writer.GetSpan(headerSize + payloadLength);
 
-        span[0] = (byte)((fin ? 0x80 : 0) | (int)opCode);
+        span[0] = (byte)((fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | (int)opCode);
 
         int offset = 2;
         if (payloadLength <= 125)

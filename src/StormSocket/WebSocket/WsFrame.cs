@@ -11,6 +11,9 @@ public readonly struct WsFrame
     /// <summary>The frame type (Text, Binary, Ping, Pong, Close, Continuation).</summary>
     public WsOpCode OpCode { get; init; }
 
+    /// <summary>True if RSV1 bit is set (indicates compressed message per RFC 7692).</summary>
+    public bool Rsv1 { get; init; }
+
     /// <summary>True if the payload was masked (client-to-server frames are always masked per RFC 6455).</summary>
     public bool Masked { get; init; }
 

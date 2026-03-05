@@ -8,7 +8,7 @@ namespace StormSocket.WebSocket;
 /// </summary>
 public static class WsFrameDecoder
 {
-    public static bool TryDecodeFrame(ref ReadOnlySequence<byte> buffer, out WsFrame frame, int maxFrameSize = 1024 * 1024)
+    public static bool TryDecodeFrame(ref ReadOnlySequence<byte> buffer, out WsFrame frame, int maxFrameSize = 1024 * 1024, bool allowCompressedFrames = false)
     {
         frame = default;
 
@@ -28,7 +28,16 @@ public static class WsFrameDecoder
         long payloadLength = header[1] & 0x7F;
 
         // RFC 6455 Section 5.2: RSV bits must be 0 unless an extension is negotiated
-        if (rsv != 0)
+        bool rsv1 = (rsv & 0x04) != 0;
+        if (allowCompressedFrames)
+        {
+            // RSV1 is allowed for permessage-deflate (RFC 7692), RSV2/RSV3 still forbidden
+            if ((rsv & 0x03) != 0)
+            {
+                throw new WsProtocolException(WsCloseStatus.ProtocolError, $"Non-zero RSV2/RSV3 bits: 0x{rsv:X}");
+            }
+        }
+        else if (rsv != 0)
         {
             throw new WsProtocolException(WsCloseStatus.ProtocolError, $"Non-zero RSV bits: 0x{rsv:X}");
         }
@@ -102,6 +111,7 @@ public static class WsFrameDecoder
             frame = new WsFrame
             {
                 Fin = fin,
+                Rsv1 = rsv1,
                 OpCode = opCode,
                 Masked = true,
                 Payload = payload,
@@ -116,6 +126,7 @@ public static class WsFrameDecoder
             frame = new WsFrame
             {
                 Fin = fin,
+                Rsv1 = rsv1,
                 OpCode = opCode,
                 Masked = false,
                 Payload = payload,

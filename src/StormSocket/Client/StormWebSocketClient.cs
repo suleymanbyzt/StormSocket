@@ -39,6 +39,7 @@ public class StormWebSocketClient : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private WsHeartbeat? _heartbeat;
+    private WsPerMessageDeflate? _deflate;
     private bool _disposed;
     private volatile ConnectionState _state = ConnectionState.Closed;
     private volatile DisconnectReason _disconnectReason;
@@ -165,17 +166,29 @@ public class StormWebSocketClient : IAsyncDisposable
 
         await transport.HandshakeAsync(ct).ConfigureAwait(false);
 
-        (byte[] request, string wsKey) = WsUpgradeHandler.BuildUpgradeRequest(uri, _options.Headers);
+        // Build extension offer for permessage-deflate if enabled
+        string? extensionOffer = _options.Compression.Enabled
+            ? WsPerMessageDeflate.BuildOfferHeader(_options.Compression)
+            : null;
+
+        (byte[] request, string wsKey) = WsUpgradeHandler.BuildUpgradeRequest(uri, _options.Headers, extensionOffer);
         Span<byte> requestSpan = transport.Output.GetSpan(request.Length);
         request.CopyTo(requestSpan);
         transport.Output.Advance(request.Length);
         await transport.Output.FlushAsync(ct).ConfigureAwait(false);
 
-        if (!await WaitForUpgradeResponseAsync(transport.Input, wsKey, ct).ConfigureAwait(false))
+        (bool upgraded, string? serverExtensions) = await WaitForUpgradeResponseAsync(transport.Input, wsKey, ct).ConfigureAwait(false);
+        if (!upgraded)
         {
             await transport.DisposeAsync().ConfigureAwait(false);
             throw new InvalidOperationException("WebSocket upgrade handshake failed.");
         }
+
+        // Parse compression negotiation result
+        _deflate?.Dispose();
+        _deflate = _options.Compression.Enabled
+            ? WsPerMessageDeflate.ParseServerResponse(serverExtensions, _options.Compression)
+            : null;
 
         _transport = transport;
         _state = ConnectionState.Connected;
@@ -214,34 +227,35 @@ public class StormWebSocketClient : IAsyncDisposable
         }
     }
 
-    private static async Task<bool> WaitForUpgradeResponseAsync(PipeReader reader, string wsKey, CancellationToken ct)
+    private static async Task<(bool Success, string? Extensions)> WaitForUpgradeResponseAsync(PipeReader reader, string wsKey, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            if (WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, wsKey))
+            if (WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, wsKey, out string? extensions))
             {
                 reader.AdvanceTo(buffer.Start, buffer.End);
-                return true;
+                return (true, extensions);
             }
 
             reader.AdvanceTo(buffer.Start, buffer.End);
 
             if (result.IsCompleted)
             {
-                return false;
+                return (false, null);
             }
         }
 
-        return false;
+        return (false, null);
     }
 
     private async Task RunFrameLoopAsync(CancellationToken ct)
     {
         ClientSessionAdapter sessionAdapter = new ClientSessionAdapter(this);
         using WsFragmentAssembler assembler = new(_options.MaxMessageSize);
+        bool hasCompression = _deflate is not null;
         try
         {
             PipeReader reader = _transport!.Input;
@@ -252,7 +266,7 @@ public class StormWebSocketClient : IAsyncDisposable
 
                 try
                 {
-                    while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _options.MaxFrameSize))
+                    while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _options.MaxFrameSize, allowCompressedFrames: hasCompression))
                     {
                         if (frame.IsControl)
                         {
@@ -263,7 +277,13 @@ public class StormWebSocketClient : IAsyncDisposable
                             WsMessage? message = assembler.TryAssemble(in frame);
                             if (message is not null)
                             {
-                                await HandleClientMessageAsync(sessionAdapter, message.Value).ConfigureAwait(false);
+                                WsMessage msg = message.Value;
+                                if (msg.Compressed && _deflate is not null)
+                                {
+                                    byte[] decompressed = _deflate.Decompress(msg.Data.Span);
+                                    msg = new WsMessage { Data = decompressed, IsText = msg.IsText };
+                                }
+                                await HandleClientMessageAsync(sessionAdapter, msg).ConfigureAwait(false);
                             }
                         }
                     }
@@ -453,6 +473,14 @@ public class StormWebSocketClient : IAsyncDisposable
             throw new InvalidOperationException("Client is not connected.");
         }
 
+        if (_deflate is not null && _deflate.ShouldCompress(data.Length))
+        {
+            byte[] compressed = _deflate.Compress(data.Span);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteMaskedFrame(writer, WsOpCode.Binary, compressed, rsv1: true),
+                compressed.Length, cancellationToken);
+        }
+
         return WriteFrameAsync(
             writer => WsFrameEncoder.WriteMaskedBinary(writer, data.Span),
             data.Length, cancellationToken);
@@ -467,6 +495,15 @@ public class StormWebSocketClient : IAsyncDisposable
         }
 
         byte[] bytes = Encoding.UTF8.GetBytes(text);
+
+        if (_deflate is not null && _deflate.ShouldCompress(bytes.Length))
+        {
+            byte[] compressed = _deflate.Compress(bytes);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteMaskedFrame(writer, WsOpCode.Text, compressed, rsv1: true),
+                compressed.Length, cancellationToken);
+        }
+
         return WriteFrameAsync(
             writer => WsFrameEncoder.WriteMaskedText(writer, bytes),
             bytes.Length, cancellationToken);
@@ -478,6 +515,14 @@ public class StormWebSocketClient : IAsyncDisposable
         if (_state is not ConnectionState.Connected)
         {
             throw new InvalidOperationException("Client is not connected.");
+        }
+
+        if (_deflate is not null && _deflate.ShouldCompress(utf8Data.Length))
+        {
+            byte[] compressed = _deflate.Compress(utf8Data.Span);
+            return WriteFrameAsync(
+                writer => WsFrameEncoder.WriteMaskedFrame(writer, WsOpCode.Text, compressed, rsv1: true),
+                compressed.Length, cancellationToken);
         }
 
         return WriteFrameAsync(
@@ -598,6 +643,7 @@ public class StormWebSocketClient : IAsyncDisposable
         GC.SuppressFinalize(this);
 
         await DisconnectAsync().ConfigureAwait(false);
+        _deflate?.Dispose();
         _writeLock.Dispose();
         _cts?.Dispose();
     }

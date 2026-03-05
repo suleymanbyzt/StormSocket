@@ -685,6 +685,82 @@ public class ClientTests
         }
     }
 
+    [Fact]
+    public async Task WsCompression_ClientServerRoundTrip()
+    {
+        int port = GetPort();
+        TaskCompletionSource<string> serverReceived = new();
+        TaskCompletionSource<string> clientReceived = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+            },
+        });
+        server.OnMessageReceived += async (session, msg) =>
+        {
+            serverReceived.TrySetResult(msg.Text);
+            // Echo back
+            await ((WebSocketSession)session).SendTextAsync(msg.Text);
+        };
+        await server.StartAsync();
+
+        await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
+        {
+            Uri = new Uri($"ws://localhost:{port}/"),
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+        });
+        client.OnMessageReceived += async msg => clientReceived.TrySetResult(msg.Text);
+        await client.ConnectAsync();
+
+        // Send a message large enough to be compressed (> MinMessageSize default 128)
+        string message = new string('A', 256) + " Hello compressed world!";
+        await client.SendTextAsync(message);
+
+        string serverResult = await serverReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(message, serverResult);
+
+        string clientResult = await clientReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(message, clientResult);
+    }
+
+    [Fact]
+    public async Task WsCompression_DisabledClient_WorksWithCompressedServer()
+    {
+        int port = GetPort();
+        TaskCompletionSource<string> serverReceived = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+            },
+        });
+        server.OnMessageReceived += async (_, msg) => serverReceived.TrySetResult(msg.Text);
+        await server.StartAsync();
+
+        // Client without compression
+        await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
+        {
+            Uri = new Uri($"ws://localhost:{port}/"),
+            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+        });
+        await client.ConnectAsync();
+
+        await client.SendTextAsync("Hello uncompressed!");
+
+        string result = await serverReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("Hello uncompressed!", result);
+    }
+
     /// <summary>Writes a masked WebSocket frame to a NetworkStream.</summary>
     private static async Task WriteRawMaskedFrame(System.Net.Sockets.NetworkStream stream, WsOpCode opCode, byte[] payload, bool fin)
     {

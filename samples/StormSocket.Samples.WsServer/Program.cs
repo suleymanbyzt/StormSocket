@@ -1,8 +1,10 @@
+using System.IO.Compression;
 using System.Net;
 using Microsoft.Extensions.Logging;
 using StormSocket.Core;
 using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
+using StormSocket.WebSocket;
 using StormSocket.Samples.WsServer.Handlers;
 using StormSocket.Samples.WsServer.Middleware;
 using StormSocket.Samples.WsServer.Services;
@@ -38,6 +40,12 @@ StormWebSocketServer server = new(new ServerOptions
         },
         MaxFrameSize = 64 * 1024,
         AllowedOrigins = null, // allow all origins
+        Compression = new WsCompressionOptions
+        {
+            Enabled = true,
+            CompressionLevel = CompressionLevel.Optimal,
+            // others are defaults: MinMessageSize=128, ServerNoContextTakeover=true, ClientNoContextTakeover=true, ServerMaxWindowBits=15, ClientMaxWindowBits=15
+        },
     },
     SlowConsumerPolicy = SlowConsumerPolicy.Drop,
     DualMode = true,

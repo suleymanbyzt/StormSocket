@@ -144,4 +144,50 @@ public class WsFrameTests
         WsProtocolException ex = Assert.Throws<WsProtocolException>(() => WsFrameDecoder.TryDecodeFrame(ref buffer, out _));
         Assert.Equal(WsCloseStatus.ProtocolError, ex.CloseStatus);
     }
+
+    [Fact]
+    public async Task Rsv1_AcceptedWhenAllowCompressedFrames()
+    {
+        Pipe pipe = new Pipe();
+        byte[] text = "compressed data"u8.ToArray();
+
+        // Write frame with RSV1 set
+        WsFrameEncoder.WriteFrame(pipe.Writer, WsOpCode.Text, text, rsv1: true);
+        await pipe.Writer.CompleteAsync();
+
+        ReadResult result = await pipe.Reader.ReadAsync();
+        ReadOnlySequence<byte> buffer = result.Buffer;
+
+        Assert.True(WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, allowCompressedFrames: true));
+        Assert.True(frame.Rsv1);
+        Assert.Equal(WsOpCode.Text, frame.OpCode);
+        Assert.Equal(text, frame.Payload.ToArray());
+    }
+
+    [Fact]
+    public async Task Rsv1_RejectedWhenNotAllowCompressedFrames()
+    {
+        Pipe pipe = new Pipe();
+        byte[] text = "compressed data"u8.ToArray();
+
+        WsFrameEncoder.WriteFrame(pipe.Writer, WsOpCode.Text, text, rsv1: true);
+        await pipe.Writer.CompleteAsync();
+
+        ReadResult result = await pipe.Reader.ReadAsync();
+        ReadOnlySequence<byte> buffer = result.Buffer;
+
+        Assert.Throws<WsProtocolException>(() =>
+            WsFrameDecoder.TryDecodeFrame(ref buffer, out _, allowCompressedFrames: false));
+    }
+
+    [Fact]
+    public async Task Rsv2Rsv3_RejectedEvenWhenAllowCompressedFrames()
+    {
+        // RSV2 set: first byte = 0xA1 (FIN=1, RSV2=1, opcode=Text)
+        byte[] frame = [0xA1, 0x02, 0x48, 0x69]; // "Hi"
+        ReadOnlySequence<byte> buffer = new ReadOnlySequence<byte>(frame);
+
+        Assert.Throws<WsProtocolException>(() =>
+            WsFrameDecoder.TryDecodeFrame(ref buffer, out _, allowCompressedFrames: true));
+    }
 }
