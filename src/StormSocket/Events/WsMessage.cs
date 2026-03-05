@@ -11,6 +11,9 @@ public readonly struct WsMessage
     /// <summary>True if the message was sent as a Text frame (UTF-8), false for Binary.</summary>
     public bool IsText { get; init; }
 
+    /// <summary>True if the message was compressed (RSV1 set on first frame). Used internally for decompression.</summary>
+    internal bool Compressed { get; init; }
+
     /// <summary>
     /// Decodes the payload as a UTF-8 string. Throws if <see cref="IsText"/> is false.
     /// </summary>

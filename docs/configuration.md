@@ -26,6 +26,7 @@
 | `AllowedOrigins` | `IReadOnlyList<string>?` | `null` | Allowed origins for CSWSH protection (RFC 6455 #10.2). `null` = allow all |
 | `HandshakeTimeout` | `TimeSpan` | `5s` | Max time for client to complete WebSocket upgrade after TCP connect. Prevents DoS via idle connections |
 | `Heartbeat` | `HeartbeatOptions` | `new()` | Ping/pong heartbeat and dead connection detection settings |
+| `Compression` | `WsCompressionOptions` | `new()` | Permessage-deflate compression settings (RFC 7692). Disabled by default |
 
 ## ClientOptions
 
@@ -52,7 +53,20 @@
 | `Socket` | `SocketTuningOptions` | `new()` | Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits) |
 | `Heartbeat` | `HeartbeatOptions` | `new()` | Ping/pong heartbeat and dead connection detection settings |
 | `Reconnect` | `ReconnectOptions` | `new()` | Auto-reconnect settings |
+| `Compression` | `WsCompressionOptions` | `new()` | Permessage-deflate compression settings (RFC 7692). Disabled by default |
 | `LoggerFactory` | `ILoggerFactory?` | `null` | Logger factory for structured logging. Null = no logging (zero overhead) |
+
+## WsCompressionOptions
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Enabled` | `bool` | `false` | Enable permessage-deflate compression |
+| `CompressionLevel` | `CompressionLevel` | `Fastest` | DEFLATE compression level |
+| `MinMessageSize` | `int` | `128` | Messages smaller than this (bytes) are sent uncompressed |
+| `ServerNoContextTakeover` | `bool` | `true` | Reset server compression context per message |
+| `ClientNoContextTakeover` | `bool` | `true` | Reset client compression context per message |
+| `ServerMaxWindowBits` | `int` | `15` | Server LZ77 window size (8-15) |
+| `ClientMaxWindowBits` | `int` | `15` | Client LZ77 window size (8-15) |
 
 ## SocketTuningOptions
 

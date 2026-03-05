@@ -1,4 +1,5 @@
 using StormSocket.Core;
+using StormSocket.WebSocket;
 
 namespace StormSocket.Server;
 
@@ -38,4 +39,7 @@ public sealed class WebSocketOptions
 
     /// <summary>Ping/pong heartbeat and dead connection detection settings.</summary>
     public HeartbeatOptions Heartbeat { get; init; } = new();
+
+    /// <summary>Permessage-deflate compression settings (RFC 7692). Disabled by default.</summary>
+    public WsCompressionOptions Compression { get; init; } = new();
 }

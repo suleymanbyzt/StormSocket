@@ -14,6 +14,7 @@ internal sealed class WsFragmentAssembler : IDisposable
     private int _offset;
     private WsOpCode _originalOpCode;
     private bool _isAssembling;
+    private bool _compressed;
 
     public WsFragmentAssembler(int maxMessageSize)
     {
@@ -57,12 +58,14 @@ internal sealed class WsFragmentAssembler : IDisposable
                 {
                     Data = frame.Payload,
                     IsText = frame.OpCode == WsOpCode.Text,
+                    Compressed = frame.Rsv1,
                 };
             }
 
             // First fragment (FIN=0, Text|Binary)
             _isAssembling = true;
             _originalOpCode = frame.OpCode;
+            _compressed = frame.Rsv1;
             _offset = 0;
             AppendPayload(frame.Payload);
             return null;
@@ -85,7 +88,7 @@ internal sealed class WsFragmentAssembler : IDisposable
             
             Reset();
             
-            return new WsMessage { Data = result, IsText = isText };
+            return new WsMessage { Data = result, IsText = isText, Compressed = _compressed };
         }
 
         return null;

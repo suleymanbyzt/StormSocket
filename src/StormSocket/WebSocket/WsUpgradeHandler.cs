@@ -300,10 +300,13 @@ public static class WsUpgradeHandler
         return WsUpgradeResult.Success;
     }
 
-    public static byte[] BuildUpgradeResponse(string wsKey)
+    public static byte[] BuildUpgradeResponse(string wsKey, string? extensionResponse = null)
     {
         string acceptKey = ComputeAcceptKey(wsKey);
-        string response = $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acceptKey}\r\n\r\n";
+        string extensionHeader = extensionResponse is not null
+            ? $"Sec-WebSocket-Extensions: {extensionResponse}\r\n"
+            : "";
+        string response = $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acceptKey}\r\n{extensionHeader}\r\n";
         return Encoding.ASCII.GetBytes(response);
     }
 
@@ -367,7 +370,7 @@ public static class WsUpgradeHandler
     /// Builds an HTTP/1.1 WebSocket upgrade request for the client.
     /// Returns the request bytes and the generated Sec-WebSocket-Key (needed to validate the server response).
     /// </summary>
-    public static (byte[] Request, string WsKey) BuildUpgradeRequest(Uri uri, IReadOnlyDictionary<string, string>? additionalHeaders = null)
+    public static (byte[] Request, string WsKey) BuildUpgradeRequest(Uri uri, IReadOnlyDictionary<string, string>? additionalHeaders = null, string? extensionOffer = null)
     {
         byte[] nonce = new byte[16];
         RandomNumberGenerator.Fill(nonce);
@@ -387,6 +390,11 @@ public static class WsUpgradeHandler
         sb.Append($"Sec-WebSocket-Key: {wsKey}\r\n");
         sb.Append("Sec-WebSocket-Version: 13\r\n");
 
+        if (extensionOffer is not null)
+        {
+            sb.Append($"Sec-WebSocket-Extensions: {extensionOffer}\r\n");
+        }
+
         if (additionalHeaders is not null)
         {
             foreach (KeyValuePair<string, string> kvp in additionalHeaders)
@@ -404,6 +412,12 @@ public static class WsUpgradeHandler
     /// </summary>
     public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey)
     {
+        return TryParseUpgradeResponse(ref buffer, expectedWsKey, out _);
+    }
+
+    public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey, out string? extensions)
+    {
+        extensions = null;
         Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
 
         ReadOnlySpan<byte> headerBytes;
@@ -443,16 +457,21 @@ public static class WsUpgradeHandler
         }
 
         string expectedAccept = ComputeAcceptKey(expectedWsKey);
+        bool acceptValid = false;
         foreach (string line in lines)
         {
             if (line.StartsWith("Sec-WebSocket-Accept:", StringComparison.OrdinalIgnoreCase))
             {
                 string actual = line.Substring("Sec-WebSocket-Accept:".Length).Trim();
-                return actual == expectedAccept;
+                acceptValid = actual == expectedAccept;
+            }
+            else if (line.StartsWith("Sec-WebSocket-Extensions:", StringComparison.OrdinalIgnoreCase))
+            {
+                extensions = line.Substring("Sec-WebSocket-Extensions:".Length).Trim();
             }
         }
 
-        return false;
+        return acceptValid;
     }
 
     private static int IndexOf(ReadOnlySpan<byte> source, ReadOnlySpan<byte> pattern)

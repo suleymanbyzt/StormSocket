@@ -379,6 +379,44 @@ WebSocket = new WebSocketOptions
 - New data frame while a fragmented message is in progress
 - Fragmented control frame (control frames must not be fragmented)
 
+## Permessage-Deflate Compression
+
+StormSocket supports the `permessage-deflate` WebSocket extension ([RFC 7692](https://www.rfc-editor.org/rfc/rfc7692.html)) for transparent message compression. When enabled, text and binary messages are compressed using DEFLATE, typically reducing bandwidth by 60-80% for text-heavy payloads (JSON, chat messages).
+
+```csharp
+// Server
+var server = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+    WebSocket = new WebSocketOptions
+    {
+        Compression = new WsCompressionOptions
+        {
+            Enabled = true,                          // Default: false
+            CompressionLevel = CompressionLevel.Fastest,
+            MinMessageSize = 128,                    // Don't compress tiny messages
+        },
+    },
+});
+
+// Client
+var client = new StormWebSocketClient(new WsClientOptions
+{
+    Uri = new Uri("ws://localhost:8080"),
+    Compression = new WsCompressionOptions { Enabled = true },
+});
+```
+
+**How it works:**
+- During the WebSocket handshake, the extension is negotiated via `Sec-WebSocket-Extensions` headers
+- If both sides support it, messages are automatically compressed on send and decompressed on receive
+- Messages smaller than `MinMessageSize` are sent uncompressed (compression overhead would be wasteful)
+- Control frames (Ping/Pong/Close) are never compressed per the RFC
+- Fragmented messages are compressed as a whole before fragmentation, and decompressed after reassembly
+- If only one side enables compression, the handshake gracefully falls back to uncompressed — no errors
+
+**Context takeover:** By default, `ServerNoContextTakeover` and `ClientNoContextTakeover` are both `true`, meaning each message is compressed independently. This uses less memory but may reduce compression ratio for similar consecutive messages.
+
 ## Disconnect Reasons
 
 Every `OnDisconnected` event includes a `DisconnectReason` explaining **why** the connection was closed. No more guessing from logs.
