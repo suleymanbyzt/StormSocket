@@ -281,4 +281,129 @@ public class WsUpgradeTests
     }
 
     #endregion
+
+    #region Subprotocol Negotiation (RFC 6455 Section 4)
+
+    [Fact]
+    public void TryParseUpgradeRequest_WithSubprotocols_ParsesRequestedList()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: mqtt, graphql-ws\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        Assert.NotNull(context);
+        Assert.Equal(2, context!.RequestedSubprotocols.Count);
+        Assert.Equal("mqtt", context.RequestedSubprotocols[0]);
+        Assert.Equal("graphql-ws", context.RequestedSubprotocols[1]);
+    }
+
+    [Fact]
+    public void TryParseUpgradeRequest_NoSubprotocolHeader_ReturnsEmptyList()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        Assert.NotNull(context);
+        Assert.Empty(context!.RequestedSubprotocols);
+    }
+
+    [Fact]
+    public void AcceptSubprotocol_SetsSelectedAndAccepts()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: mqtt, graphql-ws\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        context!.AcceptSubprotocol("mqtt");
+
+        Assert.True(context.IsHandled);
+        Assert.True(context.IsAccepted);
+        Assert.Equal("mqtt", context.SelectedSubprotocol);
+    }
+
+    [Fact]
+    public void AcceptSubprotocol_NullOrEmpty_Throws()
+    {
+        string request = "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(request);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        WsUpgradeHandler.TryParseUpgradeRequest(ref buffer, out WsUpgradeContext? context, null);
+
+        Assert.Throws<ArgumentException>(() => context!.AcceptSubprotocol(""));
+        Assert.Throws<ArgumentException>(() => context!.AcceptSubprotocol(null!));
+    }
+
+    [Fact]
+    public void BuildUpgradeResponse_WithSubprotocol_IncludesHeader()
+    {
+        byte[] response = WsUpgradeHandler.BuildUpgradeResponse("dGhlIHNhbXBsZSBub25jZQ==", subprotocol: "mqtt");
+        string responseStr = Encoding.ASCII.GetString(response);
+
+        Assert.Contains("Sec-WebSocket-Protocol: mqtt\r\n", responseStr);
+    }
+
+    [Fact]
+    public void BuildUpgradeResponse_WithoutSubprotocol_NoHeader()
+    {
+        byte[] response = WsUpgradeHandler.BuildUpgradeResponse("dGhlIHNhbXBsZSBub25jZQ==");
+        string responseStr = Encoding.ASCII.GetString(response);
+
+        Assert.DoesNotContain("Sec-WebSocket-Protocol", responseStr);
+    }
+
+    [Fact]
+    public void BuildUpgradeRequest_WithSubprotocols_IncludesHeader()
+    {
+        (byte[] request, _) = WsUpgradeHandler.BuildUpgradeRequest(
+            new Uri("ws://localhost:8080"),
+            subprotocols: ["mqtt", "graphql-ws"]);
+        string requestStr = Encoding.ASCII.GetString(request);
+
+        Assert.Contains("Sec-WebSocket-Protocol: mqtt, graphql-ws\r\n", requestStr);
+    }
+
+    [Fact]
+    public void BuildUpgradeRequest_NoSubprotocols_NoHeader()
+    {
+        (byte[] request, _) = WsUpgradeHandler.BuildUpgradeRequest(new Uri("ws://localhost:8080"));
+        string requestStr = Encoding.ASCII.GetString(request);
+
+        Assert.DoesNotContain("Sec-WebSocket-Protocol", requestStr);
+    }
+
+    [Fact]
+    public void TryParseUpgradeResponse_WithSubprotocol_ExtractsIt()
+    {
+        string responseStr = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(responseStr);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        bool ok = WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, "dGhlIHNhbXBsZSBub25jZQ==", out _, out string? subprotocol);
+
+        Assert.True(ok);
+        Assert.Equal("mqtt", subprotocol);
+    }
+
+    [Fact]
+    public void TryParseUpgradeResponse_NoSubprotocol_ReturnsNull()
+    {
+        string responseStr = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
+        byte[] bytes = Encoding.ASCII.GetBytes(responseStr);
+        ReadOnlySequence<byte> buffer = new(bytes);
+
+        bool ok = WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, "dGhlIHNhbXBsZSBub25jZQ==", out _, out string? subprotocol);
+
+        Assert.True(ok);
+        Assert.Null(subprotocol);
+    }
+
+    #endregion
 }
