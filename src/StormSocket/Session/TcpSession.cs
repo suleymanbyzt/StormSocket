@@ -21,6 +21,17 @@ public sealed class TcpSession : ISession
     public ConnectionMetrics Metrics { get; } = new();
     public EndPoint? RemoteEndPoint { get; }
     public bool IsBackpressured => _connection.IsBackpressured;
+    public IDictionary<string, object?> Items { get; } = new Dictionary<string, object?>();
+
+    public T? Get<T>(SessionKey<T> key)
+    {
+        return Items.TryGetValue(key.Name, out object? value) ? (T?)value : default;
+    }
+
+    public void Set<T>(SessionKey<T> key, T value)
+    {
+        Items[key.Name] = value;
+    }
 
     public IReadOnlySet<string> Groups
     {

@@ -76,6 +76,45 @@ foreach (ISession s in server.Sessions.All)
 }
 ```
 
+### Per-Session User Data
+
+Attach custom data (user ID, auth info, roles) directly to a session — no external dictionary needed.
+
+**String keys** (simple, familiar):
+
+```csharp
+server.OnConnected += async (session) =>
+{
+    session.Items["userId"] = "abc123";
+    session.Items["role"] = "admin";
+};
+
+server.OnMessageReceived += async (session, msg) =>
+{
+    string userId = (string)session.Items["userId"];
+};
+```
+
+**Strongly-typed keys** (compile-time safe, no casts):
+
+```csharp
+static readonly SessionKey<string> UserId = new("userId");
+static readonly SessionKey<string> Role = new("role");
+
+server.OnConnected += async (session) =>
+{
+    session.Set(UserId, "abc123");
+    session.Set(Role, "admin");
+};
+
+server.OnMessageReceived += async (session, msg) =>
+{
+    string userId = session.Get(UserId); // no cast needed
+};
+```
+
+Both approaches share the same underlying store — use whichever fits. The dictionary is not thread-safe by design, since session events are sequential per-session.
+
 ### WebSocket-specific methods
 
 Cast to `WebSocketSession` for text frame support:

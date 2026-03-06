@@ -42,6 +42,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Rate limiting middleware** - opt-in per-session or per-IP rate limiting with configurable window, action (disconnect/drop), and exceeded event
 - **Middleware pipeline** - intercept connect, disconnect, data received, data sending, and errors (works on both server and client)
 - **Backpressure & buffer limits** - configurable send/receive pipe limits prevent memory exhaustion
+- **[Per-session user data](docs/features.md#per-session-user-data)** - `session.Items` dictionary + strongly-typed `session.Get<T>` / `session.Set<T>` via `SessionKey<T>` — no external dictionary needed
 - **Slow consumer detection** - `SlowConsumerPolicy` per session: `Wait` (block), `Drop` (skip), or `Disconnect` (close)
 - **Message fragmentation** - automatic reassembly of fragmented WebSocket messages (RFC 6455 Section 5.4) with `MaxMessageSize` limit and send-side fragmentation helpers
 - **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`)
