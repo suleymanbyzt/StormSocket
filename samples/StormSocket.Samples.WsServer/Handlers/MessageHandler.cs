@@ -16,6 +16,8 @@ namespace StormSocket.Samples.WsServer.Handlers;
 /// </summary>
 public sealed class MessageHandler
 {
+    private static readonly SessionKey<ConnectedUser> UserKey = new("user");
+
     private readonly StormWebSocketServer _server;
     private readonly UserManager _users;
     private readonly BroadcastHelper _broadcast;
@@ -43,6 +45,7 @@ public sealed class MessageHandler
     private async ValueTask OnConnected(ISession session)
     {
         ConnectedUser user = _users.Add(session);
+        session.Set(UserKey, user);
         _server.Groups.Add("lobby", session);
 
         await _broadcast.SendAsync(session, new
@@ -69,7 +72,7 @@ public sealed class MessageHandler
     {
         if (!msg.IsText) return;
 
-        ConnectedUser? user = _users.Get(session.Id);
+        ConnectedUser? user = session.Get(UserKey);
         if (user is null) return;
 
         string text = msg.Text.Trim();

@@ -68,5 +68,17 @@ internal sealed class ClientSessionAdapter : ISession
 
     public void LeaveGroup(string group) { }
 
+    public IDictionary<string, object?> Items { get; } = new Dictionary<string, object?>();
+
+    public T? Get<T>(SessionKey<T> key)
+    {
+        return Items.TryGetValue(key.Name, out object? value) ? (T?)value : default;
+    }
+
+    public void Set<T>(SessionKey<T> key, T value)
+    {
+        Items[key.Name] = value;
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

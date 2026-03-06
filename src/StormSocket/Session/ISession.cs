@@ -75,4 +75,21 @@ public interface ISession : IAsyncDisposable
     /// Removes this session from a named group.
     /// </summary>
     void LeaveGroup(string group);
+
+    /// <summary>
+    /// General-purpose key/value store for attaching custom data (user ID, auth info, roles, etc.) to the session.
+    /// Not thread-safe — session events are sequential per-session, so concurrent access is not expected.
+    /// </summary>
+    IDictionary<string, object?> Items { get; }
+
+    /// <summary>
+    /// Gets a strongly-typed value from the session's <see cref="Items"/> store.
+    /// Returns <c>default(T)</c> if the key is not present.
+    /// </summary>
+    T? Get<T>(SessionKey<T> key);
+
+    /// <summary>
+    /// Sets a strongly-typed value in the session's <see cref="Items"/> store.
+    /// </summary>
+    void Set<T>(SessionKey<T> key, T value);
 }
