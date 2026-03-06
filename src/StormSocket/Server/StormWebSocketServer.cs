@@ -437,7 +437,7 @@ public class StormWebSocketServer : IAsyncDisposable
                     (WsPerMessageDeflate? deflate, string? extensionResponse) =
                         WsPerMessageDeflate.TryNegotiate(clientExtensions, _wsOptions.Compression);
 
-                    byte[] response = WsUpgradeHandler.BuildUpgradeResponse(context.WsKey, extensionResponse);
+                    byte[] response = WsUpgradeHandler.BuildUpgradeResponse(context.WsKey, extensionResponse, context.SelectedSubprotocol);
                     await WriteResponseAsync(transport, response, ct).ConfigureAwait(false);
                     return (true, deflate);
 

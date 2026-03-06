@@ -28,6 +28,9 @@ public sealed class WsClientOptions
     /// <summary>Additional HTTP headers to send during the WebSocket upgrade request.</summary>
     public Dictionary<string, string>? Headers { get; init; }
 
+    /// <summary>Subprotocols to request during the WebSocket upgrade handshake (Sec-WebSocket-Protocol). Server selects one.</summary>
+    public IReadOnlyList<string>? Subprotocols { get; init; }
+
     /// <summary>SSL options for wss:// connections. Inferred from scheme if null.</summary>
     public ClientSslOptions? Ssl { get; init; }
 
