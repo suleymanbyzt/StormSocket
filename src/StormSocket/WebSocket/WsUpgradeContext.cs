@@ -41,6 +41,18 @@ public sealed class WsUpgradeContext
     /// <summary>
     /// The Sec-WebSocket-Key from the upgrade request.
     /// </summary>
+    /// <summary>
+    /// Subprotocols requested by the client via Sec-WebSocket-Protocol header.
+    /// Empty if none were requested.
+    /// </summary>
+    public IReadOnlyList<string> RequestedSubprotocols { get; }
+
+    /// <summary>
+    /// The subprotocol selected by the server via <see cref="AcceptSubprotocol"/>.
+    /// Null if none was selected.
+    /// </summary>
+    public string? SelectedSubprotocol { get; private set; }
+
     internal string WsKey { get; }
 
     internal bool IsHandled => _handled;
@@ -61,6 +73,7 @@ public sealed class WsUpgradeContext
         Headers = headers;
         WsKey = wsKey;
         RemoteEndPoint = remoteEndPoint;
+        RequestedSubprotocols = ParseSubprotocols(headers);
     }
 
     /// <summary>
@@ -75,6 +88,21 @@ public sealed class WsUpgradeContext
 
         _handled = true;
         _accepted = true;
+    }
+
+    /// <summary>
+    /// Accept the WebSocket connection with a selected subprotocol.
+    /// The subprotocol must be one of the <see cref="RequestedSubprotocols"/>.
+    /// </summary>
+    public void AcceptSubprotocol(string subprotocol)
+    {
+        if (string.IsNullOrEmpty(subprotocol))
+        {
+            throw new ArgumentException("Subprotocol cannot be null or empty.", nameof(subprotocol));
+        }
+
+        SelectedSubprotocol = subprotocol;
+        Accept();
     }
 
     /// <summary>
@@ -104,6 +132,17 @@ public sealed class WsUpgradeContext
         429 => "Too Many Requests",
         _ => "Rejected",
     };
+
+    private static IReadOnlyList<string> ParseSubprotocols(IReadOnlyDictionary<string, string> headers)
+    {
+        if (!headers.TryGetValue("Sec-WebSocket-Protocol", out string? value) || string.IsNullOrEmpty(value))
+        {
+            return [];
+        }
+
+        string[] protocols = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return protocols;
+    }
 
     private static IReadOnlyDictionary<string, string> ParseQueryString(string? queryString)
     {

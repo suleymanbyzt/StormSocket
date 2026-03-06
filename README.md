@@ -58,10 +58,9 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 dotnet add package StormSocket
 ```
 
-```csharp
-using System.Net;
-using StormSocket.Server;
+### TCP Server
 
+```csharp
 var server = new StormTcpServer(new ServerOptions
 {
     EndPoint = new IPEndPoint(IPAddress.Any, 5000),
@@ -73,9 +72,119 @@ server.OnDataReceived += async (session, data) =>
 };
 
 await server.StartAsync();
-Console.ReadLine();
-await server.DisposeAsync();
 ```
+
+### WebSocket Server
+
+```csharp
+var ws = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+    WebSocket = new WebSocketOptions
+    {
+        Heartbeat = new() { PingInterval = TimeSpan.FromSeconds(15), MaxMissedPongs = 3 },
+        Compression = new() { Enabled = true },
+    },
+});
+
+ws.OnConnected += async session =>
+{
+    session.Set(UserId, "abc");       // type-safe session data
+    ws.Groups.Add("lobby", session);  // join a room
+};
+
+ws.OnMessageReceived += async (session, msg) =>
+{
+    await ws.BroadcastTextAsync(msg.Text, excludeId: session.Id);
+};
+
+await ws.StartAsync();
+```
+
+### WebSocket Client
+
+```csharp
+var client = new StormWebSocketClient(new WsClientOptions
+{
+    Uri = new Uri("ws://localhost:8080"),
+    Reconnect = new() { Enabled = true, Delay = TimeSpan.FromSeconds(2) },
+    Subprotocols = ["graphql-ws"],
+});
+
+client.OnMessageReceived += async msg => Console.WriteLine(msg.Text);
+await client.ConnectAsync();
+await client.SendTextAsync("Hello!");
+```
+
+### SSL — one line
+
+```csharp
+var server = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 443),
+    Ssl = new() { Certificate = X509CertificateLoader.LoadPkcs12FromFile("cert.pfx", "pass") },
+});
+```
+
+### Authentication
+
+```csharp
+ws.OnConnecting += async context =>
+{
+    string? token = context.Headers.GetValueOrDefault("Authorization");
+    if (!IsValid(token))
+        context.Reject(401, "Invalid token");
+    else
+        context.Accept();
+};
+```
+
+### Session Data — string keys or type-safe
+
+```csharp
+// String keys
+session.Items["role"] = "admin";
+
+// Strongly-typed (no casts, compile-time safe)
+static readonly SessionKey<string> UserId = new("userId");
+session.Set(UserId, "abc123");
+string id = session.Get(UserId);
+```
+
+### Groups, Broadcast, Rate Limiting
+
+```csharp
+ws.Groups.Add("room:vip", session);
+await ws.Groups.BroadcastAsync("room:vip", data, excludeId: session.Id);
+
+server.UseMiddleware(new RateLimitMiddleware(new RateLimitOptions
+{
+    Window = TimeSpan.FromSeconds(10), MaxMessages = 100,
+}));
+```
+
+### Slow Consumer Policy
+
+```csharp
+var server = new StormWebSocketServer(new ServerOptions
+{
+    SlowConsumerPolicy = SlowConsumerPolicy.Drop, // Wait | Drop | Disconnect
+    MaxConnections = 50_000,
+});
+```
+
+### Disconnect Reasons
+
+```csharp
+ws.OnDisconnected += async (session, reason) =>
+{
+    // ClosedByClient | ClosedByServer | HeartbeatTimeout | SlowConsumer
+    // ProtocolError | TransportError | RateLimited | GoingAway | ...
+    Console.WriteLine($"#{session.Id}: {reason}");
+};
+```
+
+> Full details: [Features Guide](docs/features.md) | [Examples](docs/examples.md) | [Configuration](docs/configuration.md)
 
 # Architecture
 

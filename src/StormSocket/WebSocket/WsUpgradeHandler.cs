@@ -300,13 +300,16 @@ public static class WsUpgradeHandler
         return WsUpgradeResult.Success;
     }
 
-    public static byte[] BuildUpgradeResponse(string wsKey, string? extensionResponse = null)
+    public static byte[] BuildUpgradeResponse(string wsKey, string? extensionResponse = null, string? subprotocol = null)
     {
         string acceptKey = ComputeAcceptKey(wsKey);
         string extensionHeader = extensionResponse is not null
             ? $"Sec-WebSocket-Extensions: {extensionResponse}\r\n"
             : "";
-        string response = $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acceptKey}\r\n{extensionHeader}\r\n";
+        string subprotocolHeader = subprotocol is not null
+            ? $"Sec-WebSocket-Protocol: {subprotocol}\r\n"
+            : "";
+        string response = $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acceptKey}\r\n{extensionHeader}{subprotocolHeader}\r\n";
         return Encoding.ASCII.GetBytes(response);
     }
 
@@ -370,7 +373,7 @@ public static class WsUpgradeHandler
     /// Builds an HTTP/1.1 WebSocket upgrade request for the client.
     /// Returns the request bytes and the generated Sec-WebSocket-Key (needed to validate the server response).
     /// </summary>
-    public static (byte[] Request, string WsKey) BuildUpgradeRequest(Uri uri, IReadOnlyDictionary<string, string>? additionalHeaders = null, string? extensionOffer = null)
+    public static (byte[] Request, string WsKey) BuildUpgradeRequest(Uri uri, IReadOnlyDictionary<string, string>? additionalHeaders = null, string? extensionOffer = null, IReadOnlyList<string>? subprotocols = null)
     {
         byte[] nonce = new byte[16];
         RandomNumberGenerator.Fill(nonce);
@@ -395,6 +398,11 @@ public static class WsUpgradeHandler
             sb.Append($"Sec-WebSocket-Extensions: {extensionOffer}\r\n");
         }
 
+        if (subprotocols is { Count: > 0 })
+        {
+            sb.Append($"Sec-WebSocket-Protocol: {string.Join(", ", subprotocols)}\r\n");
+        }
+
         if (additionalHeaders is not null)
         {
             foreach (KeyValuePair<string, string> kvp in additionalHeaders)
@@ -417,7 +425,13 @@ public static class WsUpgradeHandler
 
     public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey, out string? extensions)
     {
+        return TryParseUpgradeResponse(ref buffer, expectedWsKey, out extensions, out _);
+    }
+
+    public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey, out string? extensions, out string? subprotocol)
+    {
         extensions = null;
+        subprotocol = null;
         Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
 
         ReadOnlySpan<byte> headerBytes;
@@ -468,6 +482,10 @@ public static class WsUpgradeHandler
             else if (line.StartsWith("Sec-WebSocket-Extensions:", StringComparison.OrdinalIgnoreCase))
             {
                 extensions = line.Substring("Sec-WebSocket-Extensions:".Length).Trim();
+            }
+            else if (line.StartsWith("Sec-WebSocket-Protocol:", StringComparison.OrdinalIgnoreCase))
+            {
+                subprotocol = line.Substring("Sec-WebSocket-Protocol:".Length).Trim();
             }
         }
 

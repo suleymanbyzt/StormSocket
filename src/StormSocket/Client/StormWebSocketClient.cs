@@ -53,6 +53,9 @@ public class StormWebSocketClient : IAsyncDisposable
     /// <summary>The reason the last connection was closed.</summary>
     internal DisconnectReason DisconnectReason => _disconnectReason;
 
+    /// <summary>The subprotocol negotiated during the WebSocket handshake, or null if none.</summary>
+    public string? Subprotocol { get; private set; }
+
     /// <summary>The remote server's endpoint.</summary>
     public EndPoint? RemoteEndPoint { get; private set; }
 
@@ -171,13 +174,13 @@ public class StormWebSocketClient : IAsyncDisposable
             ? WsPerMessageDeflate.BuildOfferHeader(_options.Compression)
             : null;
 
-        (byte[] request, string wsKey) = WsUpgradeHandler.BuildUpgradeRequest(uri, _options.Headers, extensionOffer);
+        (byte[] request, string wsKey) = WsUpgradeHandler.BuildUpgradeRequest(uri, _options.Headers, extensionOffer, _options.Subprotocols);
         Span<byte> requestSpan = transport.Output.GetSpan(request.Length);
         request.CopyTo(requestSpan);
         transport.Output.Advance(request.Length);
         await transport.Output.FlushAsync(ct).ConfigureAwait(false);
 
-        (bool upgraded, string? serverExtensions) = await WaitForUpgradeResponseAsync(transport.Input, wsKey, ct).ConfigureAwait(false);
+        (bool upgraded, string? serverExtensions, string? negotiatedSubprotocol) = await WaitForUpgradeResponseAsync(transport.Input, wsKey, ct).ConfigureAwait(false);
         if (!upgraded)
         {
             await transport.DisposeAsync().ConfigureAwait(false);
@@ -190,6 +193,7 @@ public class StormWebSocketClient : IAsyncDisposable
             ? WsPerMessageDeflate.ParseServerResponse(serverExtensions, _options.Compression)
             : null;
 
+        Subprotocol = negotiatedSubprotocol;
         _transport = transport;
         _state = ConnectionState.Connected;
         _logger.LogInformation("Connected to {Uri}", _options.Uri);
@@ -227,28 +231,28 @@ public class StormWebSocketClient : IAsyncDisposable
         }
     }
 
-    private static async Task<(bool Success, string? Extensions)> WaitForUpgradeResponseAsync(PipeReader reader, string wsKey, CancellationToken ct)
+    private static async Task<(bool Success, string? Extensions, string? Subprotocol)> WaitForUpgradeResponseAsync(PipeReader reader, string wsKey, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            if (WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, wsKey, out string? extensions))
+            if (WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, wsKey, out string? extensions, out string? subprotocol))
             {
                 reader.AdvanceTo(buffer.Start, buffer.End);
-                return (true, extensions);
+                return (true, extensions, subprotocol);
             }
 
             reader.AdvanceTo(buffer.Start, buffer.End);
 
             if (result.IsCompleted)
             {
-                return (false, null);
+                return (false, null, null);
             }
         }
 
-        return (false, null);
+        return (false, null, null);
     }
 
     private async Task RunFrameLoopAsync(CancellationToken ct)
