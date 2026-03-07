@@ -130,7 +130,7 @@ public class ClientTests
         server.OnMessageReceived += async (session, msg) =>
         {
             // Echo back as text via WebSocketSession.SendTextAsync
-            if (session is Session.WebSocketSession wss)
+            if (session is WebSocketSession wss)
             {
                 await wss.SendTextAsync(msg.Data);
             }
@@ -140,7 +140,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // disable for test
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // disable for test
         });
         client.OnMessageReceived += async msg =>
         {
@@ -173,7 +173,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         client.OnMessageReceived += async msg =>
         {
@@ -205,7 +205,7 @@ public class ClientTests
         StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         client.OnConnected += async () => connectedTcs.TrySetResult();
         client.OnDisconnected += async (reason) => disconnectedTcs.TrySetResult();
@@ -318,7 +318,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions
+                Heartbeat = new Core.HeartbeatOptions
                 {
                     PingInterval = TimeSpan.FromMilliseconds(200),
                     MaxMissedPongs = 3,
@@ -337,7 +337,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // client doesn't send its own pings
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero }, // client doesn't send its own pings
         });
         await client.ConnectAsync();
         await serverConnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -346,7 +346,7 @@ public class ClientTests
         await Task.Delay(800);
 
         // Connection should still be alive pongs are resetting the counter
-        Assert.Equal(StormSocket.Core.ConnectionState.Connected, client.State);
+        Assert.Equal(Core.ConnectionState.Connected, client.State);
         Assert.Equal(1, server.Sessions.Count);
 
         // Verify server didn't disconnect us
@@ -357,14 +357,14 @@ public class ClientTests
     public async Task Heartbeat_DeadConnection_ClosesAfterMissedPongs()
     {
         int port = GetPort();
-        TaskCompletionSource<StormSocket.Core.DisconnectReason> serverDisconnected = new();
+        TaskCompletionSource<Core.DisconnectReason> serverDisconnected = new();
 
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions
+                Heartbeat = new Core.HeartbeatOptions
                 {
                     PingInterval = TimeSpan.FromMilliseconds(100),
                     MaxMissedPongs = 2,
@@ -397,11 +397,11 @@ public class ClientTests
         // After MaxMissedPongs(2) + 1 tick = ~300ms, server should close us
 
         // Wait for server to detect dead connection and disconnect
-        StormSocket.Core.DisconnectReason reason = await serverDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Core.DisconnectReason reason = await serverDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Server should have removed the session
         Assert.Equal(0, server.Sessions.Count);
-        Assert.Equal(StormSocket.Core.DisconnectReason.HeartbeatTimeout, reason);
+        Assert.Equal(Core.DisconnectReason.HeartbeatTimeout, reason);
     }
 
     [Fact]
@@ -456,9 +456,9 @@ public class ClientTests
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
-            SlowConsumerPolicy = StormSocket.Core.SlowConsumerPolicy.Drop,
-            WebSocket = new WebSocketOptions { Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
+            Socket = new Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
+            SlowConsumerPolicy = Core.SlowConsumerPolicy.Drop,
+            WebSocket = new WebSocketOptions { Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
         });
 
         TaskCompletionSource<WebSocketSession> connected = new();
@@ -502,7 +502,7 @@ public class ClientTests
             Assert.True(backpressured, "Slow WS client should be backpressured");
 
             // With Drop policy, session stays connected but sends are skipped
-            Assert.Equal(StormSocket.Core.ConnectionState.Connected, slowSession.State);
+            Assert.Equal(Core.ConnectionState.Connected, slowSession.State);
 
             floodCts.Cancel();
         }
@@ -520,13 +520,13 @@ public class ClientTests
         await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
-            SlowConsumerPolicy = StormSocket.Core.SlowConsumerPolicy.Disconnect,
-            WebSocket = new WebSocketOptions { Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
+            Socket = new Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
+            SlowConsumerPolicy = Core.SlowConsumerPolicy.Disconnect,
+            WebSocket = new WebSocketOptions { Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero } },
         });
 
         TaskCompletionSource<WebSocketSession> connected = new();
-        TaskCompletionSource<StormSocket.Core.DisconnectReason> disconnected = new();
+        TaskCompletionSource<Core.DisconnectReason> disconnected = new();
         server.OnConnected += async session => connected.TrySetResult((WebSocketSession)session);
         server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
         await server.StartAsync();
@@ -554,9 +554,9 @@ public class ClientTests
             });
 
             // Wait for server to disconnect the slow client
-            StormSocket.Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(0, server.Sessions.Count);
-            Assert.Equal(StormSocket.Core.DisconnectReason.SlowConsumer, reason);
+            Assert.Equal(Core.DisconnectReason.SlowConsumer, reason);
 
             floodCts.Cancel();
         }
@@ -576,7 +576,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromMilliseconds(500),
             },
         });
@@ -618,7 +618,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromSeconds(5),
             },
         });
@@ -652,7 +652,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 HandshakeTimeout = TimeSpan.FromMilliseconds(500),
             },
         });
@@ -697,8 +697,8 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
-                Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Compression = new WsCompressionOptions { Enabled = true },
             },
         });
         server.OnMessageReceived += async (session, msg) =>
@@ -712,8 +712,8 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
-            Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            Compression = new WsCompressionOptions { Enabled = true },
         });
         client.OnMessageReceived += async msg => clientReceived.TrySetResult(msg.Text);
         await client.ConnectAsync();
@@ -740,8 +740,8 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
-                Compression = new StormSocket.WebSocket.WsCompressionOptions { Enabled = true },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Compression = new WsCompressionOptions { Enabled = true },
             },
         });
         server.OnMessageReceived += async (_, msg) => serverReceived.TrySetResult(msg.Text);
@@ -751,7 +751,7 @@ public class ClientTests
         await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
         {
             Uri = new Uri($"ws://localhost:{port}/"),
-            Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
         });
         await client.ConnectAsync();
 
@@ -786,7 +786,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
             },
         });
         server.OnMessageReceived += async (_, msg) => received.TrySetResult(msg.Text);
@@ -821,7 +821,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
             },
         });
         server.OnMessageReceived += async (_, msg) => received.TrySetResult(msg.Text);
@@ -866,7 +866,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
             },
         });
         server.OnError += async (_, ex) => errorReceived.TrySetResult(ex);
@@ -891,6 +891,162 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task WsServer_IdleTimeout_DisconnectsIdleClient()
+    {
+        int port = GetPort();
+        TaskCompletionSource<Core.DisconnectReason> disconnected = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                IdleTimeout = TimeSpan.FromMilliseconds(500),
+            },
+        });
+        server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
+        await server.StartAsync();
+
+        try
+        {
+            // Connect a client that never sends any data
+            await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
+            {
+                Uri = new Uri($"ws://localhost:{port}/"),
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            });
+            await client.ConnectAsync();
+
+            // Server should disconnect the idle client
+            Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(Core.DisconnectReason.IdleTimeout, reason);
+            Assert.Equal(0, server.Sessions.Count);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_IdleTimeout_ResetByMessages()
+    {
+        int port = GetPort();
+        bool disconnected = false;
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                IdleTimeout = TimeSpan.FromMilliseconds(500),
+            },
+        });
+        server.OnDisconnected += async (_, _) => disconnected = true;
+        await server.StartAsync();
+
+        try
+        {
+            await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
+            {
+                Uri = new Uri($"ws://localhost:{port}/"),
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            });
+            await client.ConnectAsync();
+
+            // Send messages every 200ms for 1s — should keep connection alive (timeout is 500ms)
+            for (int i = 0; i < 5; i++)
+            {
+                await Task.Delay(200);
+                await client.SendTextAsync("keepalive");
+            }
+
+            Assert.False(disconnected, "Client sending data should not be disconnected by idle timeout");
+            Assert.Equal(1, server.Sessions.Count);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WsServer_IdleTimeout_PingPongDoesNotResetTimer()
+    {
+        int port = GetPort();
+        TaskCompletionSource<Core.DisconnectReason> disconnected = new();
+
+        await using StormWebSocketServer server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            WebSocket = new WebSocketOptions
+            {
+                Heartbeat = new Core.HeartbeatOptions
+                {
+                    PingInterval = TimeSpan.FromMilliseconds(100),
+                    MaxMissedPongs = 100, // high so heartbeat doesn't kill it first
+                },
+                IdleTimeout = TimeSpan.FromMilliseconds(500),
+            },
+        });
+        server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
+        await server.StartAsync();
+
+        try
+        {
+            // Client will auto-pong (default), so heartbeat stays alive
+            // But no data messages are sent, so idle timeout should fire
+            await using StormWebSocketClient client = new StormWebSocketClient(new WsClientOptions
+            {
+                Uri = new Uri($"ws://localhost:{port}/"),
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            });
+            await client.ConnectAsync();
+
+            Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(Core.DisconnectReason.IdleTimeout, reason);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TcpServer_IdleTimeout_DisconnectsIdleClient()
+    {
+        int port = GetPort();
+        TaskCompletionSource<Core.DisconnectReason> disconnected = new();
+
+        await using StormTcpServer server = new StormTcpServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            IdleTimeout = TimeSpan.FromMilliseconds(500),
+        });
+        server.OnDisconnected += async (_, reason) => disconnected.TrySetResult(reason);
+        await server.StartAsync();
+
+        try
+        {
+            await using StormTcpClient client = new StormTcpClient(new ClientOptions
+            {
+                EndPoint = new IPEndPoint(IPAddress.Loopback, port),
+            });
+            await client.ConnectAsync();
+
+            Core.DisconnectReason reason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(Core.DisconnectReason.IdleTimeout, reason);
+            Assert.Equal(0, server.Sessions.Count);
+        }
+        finally
+        {
+            await server.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task WsServer_MaxMessageSize_Exceeded()
     {
         int port = GetPort();
@@ -901,7 +1057,7 @@ public class ClientTests
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
             WebSocket = new WebSocketOptions
             {
-                Heartbeat = new StormSocket.Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
+                Heartbeat = new Core.HeartbeatOptions { PingInterval = TimeSpan.Zero },
                 MaxMessageSize = 100,
             },
         });

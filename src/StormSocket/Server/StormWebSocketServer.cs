@@ -329,6 +329,20 @@ public class StormWebSocketServer : IAsyncDisposable
                 heartbeat.Start();
             }
 
+            // Setup idle timeout
+            if (_wsOptions.IdleTimeout > TimeSpan.Zero)
+            {
+                IdleTimer idleTimer = new(_wsOptions.IdleTimeout, _logger);
+                idleTimer.OnTimeout = async () =>
+                {
+                    _logger.LogWarning("Session {SessionId} idle timeout", session.Id);
+                    session.SetDisconnectReason(DisconnectReason.IdleTimeout);
+                    await session.CloseAsync(ct).ConfigureAwait(false);
+                };
+                session.SetIdleTimer(idleTimer);
+                idleTimer.Start();
+            }
+
             await _pipeline.OnConnectedAsync(session).ConfigureAwait(false);
             if (OnConnected is not null)
             {
@@ -529,6 +543,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
     private async ValueTask HandleMessageAsync(WebSocketSession session, WsMessage msg)
     {
+        session.NotifyDataReceived();
         session.Metrics.AddBytesReceived(msg.Data.Length);
 
         ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);

@@ -14,6 +14,7 @@ public sealed class TcpSession : ISession
     private volatile ConnectionState _state;
     private int _disconnectReason;
     private int _closeGuard;
+    private IdleTimer? _idleTimer;
 
     public long Id { get; }
     public ConnectionState State => _state;
@@ -62,6 +63,16 @@ public sealed class TcpSession : ISession
                 _ = CloseAsync();
             };
         }
+    }
+
+    internal void SetIdleTimer(IdleTimer idleTimer)
+    {
+        _idleTimer = idleTimer;
+    }
+
+    internal void NotifyDataReceived()
+    {
+        _idleTimer?.OnDataReceived();
     }
 
     internal void SetState(ConnectionState state) => _state = state;
@@ -150,6 +161,12 @@ public sealed class TcpSession : ISession
     public async ValueTask DisposeAsync()
     {
         await CloseAsync().ConfigureAwait(false);
+
+        if (_idleTimer is not null)
+        {
+            await _idleTimer.DisposeAsync().ConfigureAwait(false);
+        }
+
         await _transport.DisposeAsync().ConfigureAwait(false);
     }
 }

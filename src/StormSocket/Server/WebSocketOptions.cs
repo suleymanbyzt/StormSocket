@@ -42,4 +42,11 @@ public sealed class WebSocketOptions
 
     /// <summary>Permessage-deflate compression settings (RFC 7692). Disabled by default.</summary>
     public WsCompressionOptions Compression { get; init; } = new();
+
+    /// <summary>
+    /// Maximum time a connection can remain idle (no application-level messages received)
+    /// before being automatically closed. Ping/pong frames do NOT reset the timer.
+    /// Set to <see cref="TimeSpan.Zero"/> to disable. Default: disabled.
+    /// </summary>
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.Zero;
 }

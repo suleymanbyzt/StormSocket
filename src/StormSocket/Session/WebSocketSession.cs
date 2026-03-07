@@ -27,6 +27,7 @@ public sealed class WebSocketSession : ISession
     private int _closeGuard;
     private WsHeartbeat? _heartbeat;
     private WsPerMessageDeflate? _deflate;
+    private IdleTimer? _idleTimer;
 
     public long Id { get; }
     public ConnectionState State => _state;
@@ -74,6 +75,16 @@ public sealed class WebSocketSession : ISession
     internal void SetCompression(WsPerMessageDeflate deflate)
     {
         _deflate = deflate;
+    }
+
+    internal void SetIdleTimer(IdleTimer idleTimer)
+    {
+        _idleTimer = idleTimer;
+    }
+
+    internal void NotifyDataReceived()
+    {
+        _idleTimer?.OnDataReceived();
     }
 
     internal WsPerMessageDeflate? Compression => _deflate;
@@ -368,6 +379,11 @@ public sealed class WebSocketSession : ISession
         if (_heartbeat is not null)
         {
             await _heartbeat.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (_idleTimer is not null)
+        {
+            await _idleTimer.DisposeAsync().ConfigureAwait(false);
         }
 
         _deflate?.Dispose();
