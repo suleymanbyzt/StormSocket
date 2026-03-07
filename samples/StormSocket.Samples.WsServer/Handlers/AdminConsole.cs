@@ -44,9 +44,10 @@ public sealed class AdminConsole
                 case "/broadcast": await Broadcast(arg); break;
                 case "/rooms":    ListRooms(); break;
                 case "/info":     ShowSessionInfo(arg); break;
+                case "/metrics":  ShowMetrics(); break;
                 case "/stop":     return;
                 default:
-                    Log("Commands: /sessions  /kick <id>  /broadcast <msg>  /rooms  /info <id>  /stop");
+                    Log("Commands: /sessions  /kick <id>  /broadcast <msg>  /rooms  /info <id>  /metrics  /stop");
                     break;
             }
         }
@@ -142,6 +143,20 @@ public sealed class AdminConsole
             Log($"Received: {connSession.Metrics.BytesReceived:N0} B");
         }
         Log($"Groups: [{string.Join(", ", networkSession.Groups)}]");
+    }
+
+    private void ShowMetrics()
+    {
+        var m = _server.Metrics;
+        Log("┌── Server Metrics ──");
+        Log($"│ Active connections:  {m.ActiveConnections}");
+        Log($"│ Total connections:   {m.TotalConnections}");
+        Log($"│ Messages sent:       {m.MessagesSent:N0}");
+        Log($"│ Messages received:   {m.MessagesReceived:N0}");
+        Log($"│ Bytes sent:          {m.BytesSentTotal:N0}");
+        Log($"│ Bytes received:      {m.BytesReceivedTotal:N0}");
+        Log($"│ Errors:              {m.ErrorCount}");
+        Log("└──");
     }
 
     private static void Log(string msg) => Console.WriteLine($"  {msg}");

@@ -50,6 +50,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Handshake timeout** - configurable timeout for WebSocket upgrade (DoS protection)
 - **TCP Keep-Alive** - fine-tuning options (idle time, probe interval, probe count)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
+- **Server metrics** - `server.Metrics` exposes active connections, total connections, messages sent/received, bytes, errors — built on `System.Diagnostics.Metrics` for native OpenTelemetry/Prometheus/`dotnet-counters` integration
 - **Structured logging** via `ILoggerFactory` — zero overhead when disabled, structured output when enabled
 - **Zero dependencies** beyond `System.IO.Pipelines` and `Microsoft.Extensions.Logging.Abstractions`
 
@@ -186,6 +187,40 @@ var server = new StormWebSocketServer(new ServerOptions
 });
 // ping/pong does NOT reset the timer — only real messages count
 ```
+
+### Server Metrics
+
+```csharp
+// Direct property access
+var m = server.Metrics;
+Console.WriteLine($"Active: {m.ActiveConnections}, Total: {m.TotalConnections}");
+Console.WriteLine($"Msgs in: {m.MessagesReceived}, Msgs out: {m.MessagesSent}");
+Console.WriteLine($"Bytes in: {m.BytesReceivedTotal}, Bytes out: {m.BytesSentTotal}");
+Console.WriteLine($"Errors: {m.ErrorCount}");
+```
+
+Built on `System.Diagnostics.Metrics` — works with OpenTelemetry, Prometheus, and `dotnet-counters` out of the box:
+
+```csharp
+// OpenTelemetry integration (just add an exporter)
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(m => m.AddMeter("StormSocket").AddPrometheusExporter());
+
+// Or monitor from CLI — no code needed:
+// $ dotnet-counters monitor --counters StormSocket
+```
+
+| Meter: `StormSocket` | Type | Description |
+|---|---|---|
+| `stormsocket.connections.total` | Counter | Total connections accepted |
+| `stormsocket.connections.active` | UpDownCounter | Currently active connections |
+| `stormsocket.messages.sent` | Counter | Total messages sent |
+| `stormsocket.messages.received` | Counter | Total messages received |
+| `stormsocket.bytes.sent` | Counter | Total bytes sent |
+| `stormsocket.bytes.received` | Counter | Total bytes received |
+| `stormsocket.errors` | Counter | Total errors |
+| `stormsocket.connection.duration` | Histogram | Connection duration (ms) |
+| `stormsocket.handshake.duration` | Histogram | Handshake duration (ms) |
 
 ### Disconnect Reasons
 

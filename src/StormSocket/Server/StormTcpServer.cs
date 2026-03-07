@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,9 @@ public class StormTcpServer : IAsyncDisposable
     private Task? _acceptTask;
     private readonly MiddlewarePipeline _pipeline = new();
     private bool _disposed;
+
+    /// <summary>Server-wide aggregate metrics (connections, messages, bytes, errors).</summary>
+    public ServerMetrics Metrics { get; } = new();
 
     /// <summary>All currently connected sessions, keyed by ID.</summary>
     public SessionManager Sessions { get; } = new();
@@ -231,7 +235,9 @@ public class StormTcpServer : IAsyncDisposable
         TcpSession? session = null;
         try
         {
+            long handshakeStart = Stopwatch.GetTimestamp();
             await transport.HandshakeAsync(ct).ConfigureAwait(false);
+            Metrics.RecordHandshakeDuration(StopwatchHelper.GetElapsedTime(handshakeStart));
 
             IMessageFramer framer = _options.Framer ?? RawFramer.Instance;
             PipeConnection? connection = null;
@@ -247,6 +253,7 @@ public class StormTcpServer : IAsyncDisposable
 
                     session.NotifyDataReceived();
                     session.Metrics.AddBytesReceived(data.Length);
+                    Metrics.RecordMessageReceived(data.Length);
 
                     ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, data).ConfigureAwait(false);
                     if (processed.IsEmpty) return;
@@ -264,8 +271,9 @@ public class StormTcpServer : IAsyncDisposable
                     }
                 });
 
-            session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
+            session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
             Sessions.TryAdd(session);
+            Metrics.RecordConnectionOpened();
             _logger.LogDebug("Session {SessionId} connected from {RemoteEndPoint}", id, socket.RemoteEndPoint);
 
             // Route socket errors to the server's OnError event
@@ -298,6 +306,8 @@ public class StormTcpServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Metrics.RecordError();
+
             if (session is not null)
             {
                 session.SetDisconnectReason(DisconnectReason.TransportError);
@@ -320,6 +330,7 @@ public class StormTcpServer : IAsyncDisposable
                 session.SetState(ConnectionState.Closed);
                 Sessions.TryRemove(session.Id, out _);
                 Groups.RemoveFromAll(session);
+                Metrics.RecordConnectionClosed(session.Metrics.Uptime);
 
                 DisconnectReason reason = session.DisconnectReason;
                 _logger.LogDebug("Session {SessionId} disconnected: {Reason}", session.Id, reason);

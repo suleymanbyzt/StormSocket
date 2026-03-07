@@ -9,6 +9,7 @@ public sealed class TcpSession : ISession
     private readonly PipeConnection _connection;
     private readonly ITransport _transport;
     private readonly SlowConsumerPolicy _policy;
+    private readonly ServerMetrics? _serverMetrics;
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
     private volatile ConnectionState _state;
@@ -46,13 +47,14 @@ public sealed class TcpSession : ISession
     }
 
     internal TcpSession(long id, ITransport transport, PipeConnection connection, EndPoint? remoteEndPoint,
-        SlowConsumerPolicy policy = SlowConsumerPolicy.Wait)
+        SlowConsumerPolicy policy = SlowConsumerPolicy.Wait, ServerMetrics? serverMetrics = null)
     {
         Id = id;
         _transport = transport;
         _connection = connection;
         RemoteEndPoint = remoteEndPoint;
         _policy = policy;
+        _serverMetrics = serverMetrics;
         _state = ConnectionState.Connected;
 
         if (policy == SlowConsumerPolicy.Disconnect)
@@ -105,6 +107,7 @@ public sealed class TcpSession : ISession
         if (sendTask.IsCompletedSuccessfully)
         {
             Metrics.AddBytesSent(data.Length);
+            _serverMetrics?.RecordMessageSent(data.Length);
             return ValueTask.CompletedTask;
         }
 
@@ -115,6 +118,7 @@ public sealed class TcpSession : ISession
     {
         await sendTask.ConfigureAwait(false);
         Metrics.AddBytesSent(byteCount);
+        _serverMetrics?.RecordMessageSent(byteCount);
     }
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken = default)

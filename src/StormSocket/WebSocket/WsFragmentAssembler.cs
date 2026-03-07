@@ -53,6 +53,12 @@ internal sealed class WsFragmentAssembler : IDisposable
             // Text or Binary
             if (frame.Fin)
             {
+                if (frame.Payload.Length > _maxMessageSize)
+                {
+                    throw new WsProtocolException(WsCloseStatus.MessageTooBig,
+                        $"Message size {frame.Payload.Length} exceeds maximum of {_maxMessageSize} bytes.");
+                }
+
                 // Single unfragmented message — zero-copy return
                 return new WsMessage
                 {

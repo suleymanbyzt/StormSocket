@@ -1,6 +1,8 @@
 using System.IO.Compression;
 using System.Net;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
 using StormSocket.Core;
 using StormSocket.Middleware.RateLimiting;
 using StormSocket.Server;
@@ -38,6 +40,7 @@ StormWebSocketServer server = new(new ServerOptions
             MaxMissedPongs = 3,
             AutoPong = true,
         },
+        MaxMessageSize = 1024 * 1,
         MaxFrameSize = 64 * 1024,
         AllowedOrigins = null, // allow all origins
         Compression = new WsCompressionOptions
@@ -56,7 +59,7 @@ UserManager users = new();
 BroadcastHelper broadcast = new(server);
 TickerService ticker = new(server, users, interval: TimeSpan.FromSeconds(1));
 
-// Rate limiting: max 50 messages per 5 seconds per IP
+// Rate limiting: max 100 messages per 5 seconds per IP
 RateLimitMiddleware rateLimiter = new(new RateLimitOptions
 {
     Window = TimeSpan.FromSeconds(5),
@@ -74,9 +77,17 @@ handler.Register();
 await server.StartAsync();
 ticker.Start();
 
+// OpenTelemetry Prometheus metrics endpoint: http://localhost:9464/metrics
+// Browse to see all StormSocket counters, histograms, and gauges in Prometheus format.
+using MeterProvider meterProvider = Sdk.CreateMeterProviderBuilder()
+    .AddMeter("StormSocket")
+    .AddPrometheusHttpListener(o => o.UriPrefixes = ["http://localhost:9464/"])
+    .Build()!;
+
 Console.WriteLine("StormSocket WsServer running on ws://0.0.0.0:8080");
+Console.WriteLine("Prometheus metrics:  http://localhost:9464/metrics");
 Console.WriteLine("Heartbeat: 1s tick to all clients");
-Console.WriteLine("/sessions  /kick <id>  /broadcast <msg>");
+Console.WriteLine("/sessions  /kick <id>  /broadcast <msg>  /metrics");
 Console.WriteLine("/rooms     /info <id>  /stop");
 
 AdminConsole admin = new(server, users, broadcast);

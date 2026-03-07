@@ -565,6 +565,77 @@ var server = new StormTcpServer(new ServerOptions
 
 Set to `0` for unlimited (not recommended for production).
 
+## Server Metrics
+
+Both TCP and WebSocket servers expose a `server.Metrics` property with server-wide aggregate counters. Built on `System.Diagnostics.Metrics`, so it integrates with OpenTelemetry, Prometheus, and `dotnet-counters` with zero custom bridging code.
+
+### Direct property access
+
+```csharp
+var m = server.Metrics;
+Console.WriteLine($"Active: {m.ActiveConnections}");
+Console.WriteLine($"Total:  {m.TotalConnections}");
+Console.WriteLine($"Msgs ↑: {m.MessagesSent}");
+Console.WriteLine($"Msgs ↓: {m.MessagesReceived}");
+Console.WriteLine($"Bytes ↑: {m.BytesSentTotal}");
+Console.WriteLine($"Bytes ↓: {m.BytesReceivedTotal}");
+Console.WriteLine($"Errors: {m.ErrorCount}");
+```
+
+### Periodic console logging
+
+```csharp
+_ = Task.Run(async () =>
+{
+    while (true)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(10));
+        var m = server.Metrics;
+        Console.WriteLine(
+            $"[metrics] active={m.ActiveConnections} total={m.TotalConnections} " +
+            $"msg_in={m.MessagesReceived} msg_out={m.MessagesSent} " +
+            $"bytes_in={m.BytesReceivedTotal} bytes_out={m.BytesSentTotal} " +
+            $"errors={m.ErrorCount}");
+    }
+});
+```
+
+### OpenTelemetry / Prometheus
+
+The meter name is `"StormSocket"`. Just add an exporter — no polling loops, no custom bridge code:
+
+```csharp
+// ASP.NET Core + OpenTelemetry
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics => metrics
+        .AddMeter("StormSocket")
+        .AddPrometheusExporter());
+```
+
+### dotnet-counters (CLI monitoring)
+
+Monitor live from the terminal — no code changes needed:
+
+```bash
+dotnet-counters monitor --counters StormSocket -p <pid>
+```
+
+### Available instruments
+
+| Instrument | Type | Unit | Description |
+|---|---|---|---|
+| `stormsocket.connections.total` | Counter | connections | Total connections accepted |
+| `stormsocket.connections.active` | UpDownCounter* | connections | Currently active connections |
+| `stormsocket.messages.sent` | Counter | messages | Total messages sent |
+| `stormsocket.messages.received` | Counter | messages | Total messages received |
+| `stormsocket.bytes.sent` | Counter | bytes | Total bytes sent |
+| `stormsocket.bytes.received` | Counter | bytes | Total bytes received |
+| `stormsocket.errors` | Counter | errors | Total errors |
+| `stormsocket.connection.duration` | Histogram | ms | Connection lifetime |
+| `stormsocket.handshake.duration` | Histogram | ms | TLS + WS upgrade time |
+
+\* `UpDownCounter` requires net7.0+. On net6.0, use `server.Metrics.ActiveConnections` property instead.
+
 ## Logging
 
 StormSocket supports structured logging via `Microsoft.Extensions.Logging`. Pass an `ILoggerFactory` through options — if omitted, logging is completely disabled with zero overhead.
