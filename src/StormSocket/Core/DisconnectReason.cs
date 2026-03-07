@@ -38,4 +38,7 @@ public enum DisconnectReason
 
     /// <summary>The session exceeded the configured rate limit.</summary>
     RateLimited,
+
+    /// <summary>The session was closed because no application-level data was received within the configured idle timeout.</summary>
+    IdleTimeout,
 }

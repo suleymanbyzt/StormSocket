@@ -245,6 +245,7 @@ public class StormTcpServer : IAsyncDisposable
                         return;
                     }
 
+                    session.NotifyDataReceived();
                     session.Metrics.AddBytesReceived(data.Length);
 
                     ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, data).ConfigureAwait(false);
@@ -271,6 +272,20 @@ public class StormTcpServer : IAsyncDisposable
             if (transport is TcpTransport tcp)
             {
                 tcp.OnSocketError = error => { OnError?.Invoke(session, new SocketException((int)error)); };
+            }
+
+            // Setup idle timeout
+            if (_options.IdleTimeout > TimeSpan.Zero)
+            {
+                IdleTimer idleTimer = new(_options.IdleTimeout, _logger);
+                idleTimer.OnTimeout = async () =>
+                {
+                    _logger.LogWarning("Session {SessionId} idle timeout", session.Id);
+                    session.SetDisconnectReason(DisconnectReason.IdleTimeout);
+                    await session.CloseAsync(ct).ConfigureAwait(false);
+                };
+                session.SetIdleTimer(idleTimer);
+                idleTimer.Start();
             }
 
             await _pipeline.OnConnectedAsync(session).ConfigureAwait(false);

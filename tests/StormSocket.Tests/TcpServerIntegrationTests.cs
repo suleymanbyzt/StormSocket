@@ -16,7 +16,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            Socket = new StormSocket.Core.SocketTuningOptions { NoDelay = true },
+            Socket = new SocketTuningOptions { NoDelay = true },
         });
 
         server.OnDataReceived += async (session, data) =>
@@ -142,7 +142,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 },
+            Socket = new SocketTuningOptions { MaxPendingSendBytes = 1024 },
             SlowConsumerPolicy = SlowConsumerPolicy.Drop,
         });
 
@@ -188,7 +188,7 @@ public class TcpServerIntegrationTests
             Assert.True(backpressured, "Slow client should be backpressured");
 
             // With Drop policy, session stays connected but sends are skipped
-            Assert.Equal(StormSocket.Core.ConnectionState.Connected, slowSession.State);
+            Assert.Equal(ConnectionState.Connected, slowSession.State);
 
             floodCts.Cancel();
         }
@@ -206,7 +206,7 @@ public class TcpServerIntegrationTests
         StormTcpServer server = new StormTcpServer(new ServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, port),
-            Socket = new StormSocket.Core.SocketTuningOptions { MaxPendingSendBytes = 1024 * 16 },
+            Socket = new SocketTuningOptions { MaxPendingSendBytes = 1024 * 16 },
             SendBufferSize = 1024,
             SlowConsumerPolicy = SlowConsumerPolicy.Disconnect,
         });

@@ -58,6 +58,14 @@ public sealed class ServerOptions
     /// </summary>
     public IMessageFramer? Framer { get; init; }
 
+    /// <summary>
+    /// Maximum time a connection can remain idle (no application-level data received)
+    /// before being automatically closed. Set to <see cref="TimeSpan.Zero"/> to disable.
+    /// For WebSocket servers, use <see cref="WebSocketOptions.IdleTimeout"/> instead.
+    /// Default: disabled.
+    /// </summary>
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.Zero;
+
     /// <summary>Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits).</summary>
     public SocketTuningOptions Socket { get; init; } = new();
 
