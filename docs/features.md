@@ -489,6 +489,8 @@ The reason is also available on the session itself via `session.DisconnectReason
 | `SlowConsumer` | Session couldn't keep up with outgoing data |
 | `GoingAway` | Server is shutting down (RFC 6455 status 1001) |
 | `RateLimited` | Rate limit exceeded with `Disconnect` action |
+| `IdleTimeout` | No application-level data received within the configured idle timeout |
+| `MessageTooBig` | Incoming message exceeds the configured `MaxMessageSize` — client is disconnected with RFC 6455 status 1009 |
 
 > **Note:** The reason is set internally before `OnDisconnected` fires. When multiple reasons apply (e.g. heartbeat timeout triggers a `CloseAsync`), the first/most specific reason wins.
 
