@@ -52,12 +52,12 @@ Every connection gets an `ISession` with a unique auto-incrementing ID.
 int online = server.Sessions.Count;
 
 // Find a session by ID
-if (server.Sessions.TryGet(42, out ISession? session))
+if (server.Sessions.TryGet(42, out INetworkSession? session) && session is ISession s)
 {
-    Console.WriteLine($"Session #{session.Id}, uptime: {session.Metrics.Uptime}");
-    Console.WriteLine($"Bytes sent: {session.Metrics.BytesSent}");
-    Console.WriteLine($"Bytes received: {session.Metrics.BytesReceived}");
-    Console.WriteLine($"Groups: {string.Join(", ", session.Groups)}");
+    Console.WriteLine($"Session #{s.Id}, uptime: {s.Metrics.Uptime}");
+    Console.WriteLine($"Bytes sent: {s.Metrics.BytesSent}");
+    Console.WriteLine($"Bytes received: {s.Metrics.BytesReceived}");
+    Console.WriteLine($"Groups: {string.Join(", ", s.Groups)}");
 }
 
 // Broadcast to all
@@ -70,9 +70,10 @@ await server.BroadcastAsync(data, excludeId: senderId);
 await session.CloseAsync();
 
 // Iterate all sessions
-foreach (ISession s in server.Sessions.All)
+foreach (INetworkSession ns in server.Sessions.All)
 {
-    Console.WriteLine($"#{s.Id} - {s.State} - up {s.Metrics.Uptime:hh\\:mm\\:ss}");
+    if (ns is ISession s)
+        Console.WriteLine($"#{s.Id} - {s.State} - up {s.Metrics.Uptime:hh\\:mm\\:ss}");
 }
 ```
 

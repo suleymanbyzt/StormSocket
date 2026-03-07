@@ -55,12 +55,15 @@ public sealed class AdminConsole
     private void ListSessions()
     {
         Log($"┌── Sessions ({_server.Sessions.Count}) ──");
-        foreach (ISession s in _server.Sessions.All)
+        foreach (INetworkSession s in _server.Sessions.All)
         {
             ConnectedUser? user = _users.Get(s.Id);
             string name = user?.Name ?? "?";
             string groups = string.Join(", ", s.Groups);
-            Log($"│ #{s.Id,-4} {name,-14} up={s.Metrics.Uptime:hh\\:mm\\:ss}  groups=[{groups}]  tx={s.Metrics.BytesSent}B  rx={s.Metrics.BytesReceived}B");
+            if (s is ISession cs)
+            {
+                Log($"│ #{s.Id,-4} {name,-14} up={cs.Metrics.Uptime:hh\\:mm\\:ss}  groups=[{groups}]  tx={cs.Metrics.BytesSent}B  rx={cs.Metrics.BytesReceived}B");
+            }
         }
         Log($"└── {_server.Sessions.Count} total");
     }
@@ -73,18 +76,21 @@ public sealed class AdminConsole
             return;
         }
 
-        if (!_server.Sessions.TryGet(id, out ISession? session) || session is null)
+        if (!_server.Sessions.TryGet(id, out INetworkSession? networkSession) || networkSession is null)
         {
             Log($"#{id} not found.");
             return;
         }
 
-        if (session is WebSocketSession ws)
+        if (networkSession is WebSocketSession ws)
         {
             await ws.SendTextAsync("{\"type\":\"system\",\"message\":\"Kicked by admin.\"}");
         }
 
-        await session.CloseAsync();
+        if (networkSession is ISession connSession)
+        {
+            await connSession.CloseAsync();
+        }
         Log($"#{id} kicked.");
     }
 
@@ -118,7 +124,7 @@ public sealed class AdminConsole
             return;
         }
 
-        if (!_server.Sessions.TryGet(id, out ISession? session) || session is null)
+        if (!_server.Sessions.TryGet(id, out INetworkSession? networkSession) || networkSession is null)
         {
             Log($"#{id} not found.");
             return;
@@ -126,13 +132,16 @@ public sealed class AdminConsole
 
         ConnectedUser? user = _users.Get(id);
 
-        Log($"ID: #{session.Id}");
+        Log($"ID: #{networkSession.Id}");
         Log($"Name: {user?.Name ?? "?"}");
-        Log($"State: {session.State}");
-        Log($"Uptime: {session.Metrics.Uptime:hh\\:mm\\:ss}");
-        Log($"Sent: {session.Metrics.BytesSent:N0} B");
-        Log($"Received: {session.Metrics.BytesReceived:N0} B");
-        Log($"Groups: [{string.Join(", ", session.Groups)}]");
+        if (networkSession is ISession connSession)
+        {
+            Log($"State: {connSession.State}");
+            Log($"Uptime: {connSession.Metrics.Uptime:hh\\:mm\\:ss}");
+            Log($"Sent: {connSession.Metrics.BytesSent:N0} B");
+            Log($"Received: {connSession.Metrics.BytesReceived:N0} B");
+        }
+        Log($"Groups: [{string.Join(", ", networkSession.Groups)}]");
     }
 
     private static void Log(string msg) => Console.WriteLine($"  {msg}");

@@ -210,6 +210,7 @@ ws.OnDisconnected += async (session, reason) =>
 | **SSL as decorator** | Same server, just add `SslOptions`. |
 | **Integer session IDs** | `Interlocked.Increment` (fast, sortable) instead of Guid. |
 | **Write serialization** | Per-session `SemaphoreSlim` lock prevents frame corruption. |
+| **Interface hierarchy** | `INetworkSession` (base) → `ISession` (connection-oriented) → `WebSocketSession` (WS-specific). Ready for future UDP. |
 
 # Benchmarks
 
@@ -247,7 +248,7 @@ dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoClient --
 | [Features Guide](docs/features.md) | Sessions, groups, framing, heartbeat, slow consumer, rate limiting, fragmentation, disconnect reasons |
 | [Middleware](docs/middleware.md) | Pipeline, custom middleware, built-in rate limiting |
 | [Configuration](docs/configuration.md) | All options tables (ServerOptions, WebSocketOptions, ClientOptions, etc.) |
-| [API Reference](docs/api-reference.md) | ISession, WebSocketSession, clients, middleware, framers |
+| [API Reference](docs/api-reference.md) | INetworkSession, ISession, WebSocketSession, clients, middleware, framers |
 | [Architecture](docs/architecture.md) | Connection lifecycle, write serialization, backpressure internals |
 
 # Building

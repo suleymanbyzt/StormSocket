@@ -7,7 +7,7 @@ namespace StormSocket.Tests;
 
 public class SessionItemsTests
 {
-    private sealed class FakeSession : ISession
+    private sealed class FakeNetworkSession : ISession
     {
         public long Id { get; init; }
         public ConnectionState State => ConnectionState.Connected;
@@ -41,72 +41,72 @@ public class SessionItemsTests
     [Fact]
     public void SetAndGet_StringValue()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        session.Set(UserId, "abc123");
+        networkSession.Set(UserId, "abc123");
 
-        Assert.Equal("abc123", session.Get(UserId));
+        Assert.Equal("abc123", networkSession.Get(UserId));
     }
 
     [Fact]
     public void SetAndGet_IntValue()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        session.Set(Score, 42);
+        networkSession.Set(Score, 42);
 
-        Assert.Equal(42, session.Get(Score));
+        Assert.Equal(42, networkSession.Get(Score));
     }
 
     [Fact]
     public void SetAndGet_ComplexType()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
         List<string> roles = ["admin", "moderator"];
 
-        session.Set(Roles, roles);
+        networkSession.Set(Roles, roles);
 
-        Assert.Same(roles, session.Get(Roles));
+        Assert.Same(roles, networkSession.Get(Roles));
     }
 
     [Fact]
     public void Get_ReturnsDefault_WhenKeyNotSet()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        Assert.Null(session.Get(UserId));
-        Assert.Equal(0, session.Get(Score));
+        Assert.Null(networkSession.Get(UserId));
+        Assert.Equal(0, networkSession.Get(Score));
     }
 
     [Fact]
     public void Set_OverwritesPreviousValue()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        session.Set(UserId, "first");
-        session.Set(UserId, "second");
+        networkSession.Set(UserId, "first");
+        networkSession.Set(UserId, "second");
 
-        Assert.Equal("second", session.Get(UserId));
+        Assert.Equal("second", networkSession.Get(UserId));
     }
 
     [Fact]
     public void Items_Dictionary_WorksDirectly()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        session.Items["key"] = "value";
+        networkSession.Items["key"] = "value";
 
-        Assert.Equal("value", session.Items["key"]);
+        Assert.Equal("value", networkSession.Items["key"]);
     }
 
     [Fact]
     public void TypedAndUntypedAccess_ShareSameStore()
     {
-        FakeSession session = new() { Id = 1 };
+        FakeNetworkSession networkSession = new() { Id = 1 };
 
-        session.Set(UserId, "abc");
+        networkSession.Set(UserId, "abc");
 
-        Assert.Equal("abc", session.Items["userId"]);
+        Assert.Equal("abc", networkSession.Items["userId"]);
     }
 
     [Fact]

@@ -51,9 +51,9 @@ public sealed class TickerService : IAsyncDisposable
 
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
 
-                foreach (ISession session in _server.Sessions.All)
+                foreach (INetworkSession networkSession in _server.Sessions.All)
                 {
-                    if (session is WebSocketSession ws)
+                    if (networkSession is WebSocketSession ws)
                     {
                         try
                         {

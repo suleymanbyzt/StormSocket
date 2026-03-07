@@ -7,7 +7,7 @@ namespace StormSocket.Tests;
 
 public class SessionManagerTests
 {
-    private sealed class FakeSession : ISession
+    private sealed class FakeNetworkSession : ISession
     {
         public long Id { get; init; }
 
@@ -68,23 +68,23 @@ public class SessionManagerTests
     public void TryAdd_And_TryGet()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession session = new FakeSession { Id = 1 };
+        FakeNetworkSession networkSession = new FakeNetworkSession { Id = 1 };
 
-        Assert.True(mgr.TryAdd(session));
+        Assert.True(mgr.TryAdd(networkSession));
         Assert.Equal(1, mgr.Count);
-        Assert.True(mgr.TryGet(1, out ISession? found));
-        Assert.Same(session, found);
+        Assert.True(mgr.TryGet(1, out INetworkSession? found));
+        Assert.Same(networkSession, found);
     }
 
     [Fact]
     public void TryRemove()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession session = new FakeSession { Id = 1 };
-        mgr.TryAdd(session);
+        FakeNetworkSession networkSession = new FakeNetworkSession { Id = 1 };
+        mgr.TryAdd(networkSession);
 
-        Assert.True(mgr.TryRemove(1, out ISession? removed));
-        Assert.Same(session, removed);
+        Assert.True(mgr.TryRemove(1, out INetworkSession? removed));
+        Assert.Same(networkSession, removed);
         Assert.Equal(0, mgr.Count);
     }
 
@@ -92,8 +92,8 @@ public class SessionManagerTests
     public async Task Broadcast_SendsToAll()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession s1 = new FakeSession { Id = 1 };
-        FakeSession s2 = new FakeSession { Id = 2 };
+        FakeNetworkSession s1 = new FakeNetworkSession { Id = 1 };
+        FakeNetworkSession s2 = new FakeNetworkSession { Id = 2 };
         mgr.TryAdd(s1);
         mgr.TryAdd(s2);
 
@@ -108,8 +108,8 @@ public class SessionManagerTests
     public async Task Broadcast_ExcludesSession()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession s1 = new FakeSession { Id = 1 };
-        FakeSession s2 = new FakeSession { Id = 2 };
+        FakeNetworkSession s1 = new FakeNetworkSession { Id = 1 };
+        FakeNetworkSession s2 = new FakeNetworkSession { Id = 2 };
         mgr.TryAdd(s1);
         mgr.TryAdd(s2);
 
@@ -123,8 +123,8 @@ public class SessionManagerTests
     public async Task Broadcast_DropPolicy_SkipsBackpressuredSession()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession fast = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Drop };
-        FakeSession slow = new FakeSession { Id = 2, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
+        FakeNetworkSession fast = new FakeNetworkSession { Id = 1, Policy = SlowConsumerPolicy.Drop };
+        FakeNetworkSession slow = new FakeNetworkSession { Id = 2, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
         mgr.TryAdd(fast);
         mgr.TryAdd(slow);
 
@@ -138,8 +138,8 @@ public class SessionManagerTests
     public async Task Broadcast_DisconnectPolicy_ClosesBackpressuredSession()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession fast = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect };
-        FakeSession slow = new FakeSession { Id = 2, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
+        FakeNetworkSession fast = new FakeNetworkSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect };
+        FakeNetworkSession slow = new FakeNetworkSession { Id = 2, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
         mgr.TryAdd(fast);
         mgr.TryAdd(slow);
 
@@ -154,8 +154,8 @@ public class SessionManagerTests
     public async Task Broadcast_WaitPolicy_SendsToBackpressuredSession()
     {
         SessionManager mgr = new SessionManager();
-        FakeSession fast = new FakeSession { Id = 1 };
-        FakeSession slow = new FakeSession { Id = 2, IsBackpressured = true };
+        FakeNetworkSession fast = new FakeNetworkSession { Id = 1 };
+        FakeNetworkSession slow = new FakeNetworkSession { Id = 2, IsBackpressured = true };
         mgr.TryAdd(fast);
         mgr.TryAdd(slow);
 
@@ -168,22 +168,22 @@ public class SessionManagerTests
     [Fact]
     public async Task SendAsync_DropPolicy_SkipsWhenBackpressured()
     {
-        FakeSession session = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
+        FakeNetworkSession networkSession = new FakeNetworkSession { Id = 1, Policy = SlowConsumerPolicy.Drop, IsBackpressured = true };
 
-        await session.SendAsync(new byte[] { 42 });
+        await networkSession.SendAsync(new byte[] { 42 });
 
-        Assert.Empty(session.SentData);
-        Assert.False(session.Closed);
+        Assert.Empty(networkSession.SentData);
+        Assert.False(networkSession.Closed);
     }
 
     [Fact]
     public async Task SendAsync_DisconnectPolicy_ClosesWhenBackpressured()
     {
-        FakeSession session = new FakeSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
+        FakeNetworkSession networkSession = new FakeNetworkSession { Id = 1, Policy = SlowConsumerPolicy.Disconnect, IsBackpressured = true };
 
-        await session.SendAsync(new byte[] { 42 });
+        await networkSession.SendAsync(new byte[] { 42 });
 
-        Assert.Empty(session.SentData);
-        Assert.True(session.Closed);
+        Assert.Empty(networkSession.SentData);
+        Assert.True(networkSession.Closed);
     }
 }
