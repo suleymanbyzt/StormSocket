@@ -31,7 +31,7 @@ public interface IConnectionMiddleware
     ValueTask<ReadOnlyMemory<byte>> OnDataSendingAsync(
         ISession session, ReadOnlyMemory<byte> data);
 
-    ValueTask OnDisconnectedAsync(ISession session);
+    ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason);
 
     ValueTask OnErrorAsync(ISession session, Exception exception);
 }
@@ -55,10 +55,10 @@ public sealed class LoggingMiddleware : IConnectionMiddleware
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnDisconnectedAsync(ISession session)
+    public ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
     {
         Console.WriteLine(
-            $"[LOG] #{session.Id} disconnected  " +
+            $"[LOG] #{session.Id} disconnected ({reason})  " +
             $"up={session.Metrics.Uptime:hh\\:mm\\:ss}  " +
             $"tx={session.Metrics.BytesSent}B  " +
             $"rx={session.Metrics.BytesReceived}B");

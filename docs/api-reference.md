@@ -1,22 +1,40 @@
 # API Reference
 
-## ISession
+## INetworkSession (base)
+
+Base interface shared by all session types (TCP, WebSocket, future UDP):
 
 ```csharp
-public interface ISession : IAsyncDisposable
+public interface INetworkSession
 {
     long Id { get; }                            // Unique auto-incrementing ID
+    EndPoint? RemoteEndPoint { get; }           // Remote client's IP and port
+    IReadOnlySet<string> Groups { get; }        // Group memberships
+
+    ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default);
+    void JoinGroup(string group);
+    void LeaveGroup(string group);
+
+    IDictionary<string, object?> Items { get; } // Per-session user data
+    T? Get<T>(SessionKey<T> key);               // Typed accessor
+    void Set<T>(SessionKey<T> key, T value);    // Typed setter
+}
+```
+
+## ISession
+
+Connection-oriented session (TCP, WebSocket). Extends `INetworkSession` with lifecycle members:
+
+```csharp
+public interface ISession : INetworkSession, IAsyncDisposable
+{
     ConnectionState State { get; }              // Connected, Closing, Closed
     DisconnectReason DisconnectReason { get; }  // Why the connection was closed
     ConnectionMetrics Metrics { get; }          // BytesSent, BytesReceived, Uptime
     bool IsBackpressured { get; }               // True when send buffer is full
-    IReadOnlySet<string> Groups { get; }        // Group memberships
 
-    ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default);
     ValueTask CloseAsync(CancellationToken ct = default);
     void Abort();
-    void JoinGroup(string group);
-    void LeaveGroup(string group);
 }
 ```
 
@@ -42,8 +60,8 @@ await session.CloseAsync();
 
 ```csharp
 server.Sessions.Count;                              // Current count
-server.Sessions.All;                                 // IEnumerable<ISession>
-server.Sessions.TryGet(id, out ISession? session);   // Lookup by ID
+server.Sessions.All;                                       // IEnumerable<INetworkSession>
+server.Sessions.TryGet(id, out INetworkSession? session);  // Lookup by ID
 server.Sessions.BroadcastAsync(data);                // Send to all
 server.Sessions.CloseAllAsync();                     // Graceful shutdown
 ```
