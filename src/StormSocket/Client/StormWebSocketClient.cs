@@ -294,8 +294,11 @@ public class StormWebSocketClient : IAsyncDisposable
                 }
                 catch (WsProtocolException ex)
                 {
-                    _logger.LogWarning(ex, "Protocol error");
-                    _disconnectReason = DisconnectReason.ProtocolError;
+                    DisconnectReason reason = ex.CloseStatus == WsCloseStatus.MessageTooBig
+                        ? DisconnectReason.MessageTooBig
+                        : DisconnectReason.ProtocolError;
+                    _logger.LogWarning("Client {Reason}: {Message}", reason, ex.Message);
+                    _disconnectReason = reason;
                     await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedClose(writer, ex.CloseStatus), cancellationToken: ct);
                     await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
                     if (OnError is not null)

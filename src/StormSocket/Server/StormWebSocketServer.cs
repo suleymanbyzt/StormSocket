@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
@@ -38,6 +39,9 @@ public class StormWebSocketServer : IAsyncDisposable
     private Task? _acceptTask;
     private readonly MiddlewarePipeline _pipeline = new();
     private bool _disposed;
+
+    /// <summary>Server-wide aggregate metrics (connections, messages, bytes, errors).</summary>
+    public ServerMetrics Metrics { get; } = new();
 
     /// <summary>All currently connected WebSocket sessions.</summary>
     public SessionManager Sessions { get; } = new();
@@ -285,9 +289,11 @@ public class StormWebSocketServer : IAsyncDisposable
         WebSocketSession? session = null;
         try
         {
+            long handshakeStart = Stopwatch.GetTimestamp();
             await transport.HandshakeAsync(ct).ConfigureAwait(false);
 
             (bool upgradeSuccess, WsPerMessageDeflate? deflate) = await PerformUpgradeAsync(transport, socket.RemoteEndPoint, ct).ConfigureAwait(false);
+            Metrics.RecordHandshakeDuration(StopwatchHelper.GetElapsedTime(handshakeStart));
             if (!upgradeSuccess)
             {
                 deflate?.Dispose();
@@ -295,13 +301,14 @@ public class StormWebSocketServer : IAsyncDisposable
                 return;
             }
 
-            session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy);
+            session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
             if (deflate is not null)
             {
                 session.SetCompression(deflate);
             }
             using WsFragmentAssembler assembler = new(_wsOptions.MaxMessageSize);
             Sessions.TryAdd(session);
+            Metrics.RecordConnectionOpened();
             _logger.LogDebug("Session {SessionId} connected from {RemoteEndPoint}", id, socket.RemoteEndPoint);
 
             // Route socket errors to the server's OnError event
@@ -354,6 +361,8 @@ public class StormWebSocketServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Metrics.RecordError();
+
             if (session is not null)
             {
                 session.SetDisconnectReason(ex is OperationCanceledException
@@ -378,6 +387,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 session.SetState(ConnectionState.Closed);
                 Sessions.TryRemove(session.Id, out _);
                 Groups.RemoveFromAll(session);
+                Metrics.RecordConnectionClosed(session.Metrics.Uptime);
 
                 DisconnectReason reason = session.DisconnectReason;
                 _logger.LogDebug("Session {SessionId} disconnected: {Reason}", session.Id, reason);
@@ -518,8 +528,12 @@ public class StormWebSocketServer : IAsyncDisposable
             }
             catch (WsProtocolException ex)
             {
-                _logger.LogWarning(ex, "Session {SessionId} protocol error", session.Id);
-                session.SetDisconnectReason(DisconnectReason.ProtocolError);
+                Metrics.RecordError();
+                DisconnectReason reason = ex.CloseStatus == WsCloseStatus.MessageTooBig
+                    ? DisconnectReason.MessageTooBig
+                    : DisconnectReason.ProtocolError;
+                _logger.LogWarning("Session {SessionId} {Reason}: {Message}", session.Id, reason, ex.Message);
+                session.SetDisconnectReason(reason);
                 WsCloseStatus status = ex.CloseStatus;
                 await session.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, status), cancellationToken: ct);
                 await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
@@ -545,6 +559,7 @@ public class StormWebSocketServer : IAsyncDisposable
     {
         session.NotifyDataReceived();
         session.Metrics.AddBytesReceived(msg.Data.Length);
+        Metrics.RecordMessageReceived(msg.Data.Length);
 
         ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
         if (processed.IsEmpty)

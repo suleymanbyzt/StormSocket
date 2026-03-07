@@ -66,6 +66,36 @@ server.Sessions.BroadcastAsync(data);                // Send to all
 server.Sessions.CloseAllAsync();                     // Graceful shutdown
 ```
 
+## ServerMetrics
+
+Both `StormTcpServer` and `StormWebSocketServer` expose a `Metrics` property with server-wide aggregate counters. Built on `System.Diagnostics.Metrics` (Meter name: `"StormSocket"`) for native OpenTelemetry/Prometheus/`dotnet-counters` integration.
+
+```csharp
+server.Metrics.ActiveConnections;    // long  — currently connected sessions
+server.Metrics.TotalConnections;     // long  — total connections since start
+server.Metrics.MessagesSent;         // long  — total messages sent
+server.Metrics.MessagesReceived;     // long  — total messages received
+server.Metrics.BytesSentTotal;       // long  — aggregate bytes sent
+server.Metrics.BytesReceivedTotal;   // long  — aggregate bytes received
+server.Metrics.ErrorCount;           // long  — total errors
+```
+
+**Instruments (System.Diagnostics.Metrics):**
+
+| Name | Type | Unit |
+|---|---|---|
+| `stormsocket.connections.total` | Counter&lt;long&gt; | connections |
+| `stormsocket.connections.active` | UpDownCounter&lt;long&gt; | connections |
+| `stormsocket.messages.sent` | Counter&lt;long&gt; | messages |
+| `stormsocket.messages.received` | Counter&lt;long&gt; | messages |
+| `stormsocket.bytes.sent` | Counter&lt;long&gt; | bytes |
+| `stormsocket.bytes.received` | Counter&lt;long&gt; | bytes |
+| `stormsocket.errors` | Counter&lt;long&gt; | errors |
+| `stormsocket.connection.duration` | Histogram&lt;double&gt; | ms |
+| `stormsocket.handshake.duration` | Histogram&lt;double&gt; | ms |
+
+> Note: `UpDownCounter` requires net7.0+. On net6.0, active connections are still available via `server.Metrics.ActiveConnections` property.
+
 ## SessionGroup
 
 ```csharp

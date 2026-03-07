@@ -18,6 +18,7 @@ public sealed class WebSocketSession : ISession
 {
     private readonly ITransport _transport;
     private readonly SlowConsumerPolicy _policy;
+    private readonly ServerMetrics? _serverMetrics;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
@@ -58,12 +59,13 @@ public sealed class WebSocketSession : ISession
         }
     }
 
-    internal WebSocketSession(long id, ITransport transport, EndPoint? remoteEndPoint, SlowConsumerPolicy policy = SlowConsumerPolicy.Wait)
+    internal WebSocketSession(long id, ITransport transport, EndPoint? remoteEndPoint, SlowConsumerPolicy policy = SlowConsumerPolicy.Wait, ServerMetrics? serverMetrics = null)
     {
         Id = id;
         _transport = transport;
         RemoteEndPoint = remoteEndPoint;
         _policy = policy;
+        _serverMetrics = serverMetrics;
         _state = ConnectionState.Connected;
     }
 
@@ -124,6 +126,7 @@ public sealed class WebSocketSession : ISession
                 if (byteCount > 0)
                 {
                     Metrics.AddBytesSent(byteCount);
+                    _serverMetrics?.RecordMessageSent(byteCount);
                 }
 
                 return ValueTask.CompletedTask;
@@ -159,6 +162,7 @@ public sealed class WebSocketSession : ISession
         if (byteCount > 0)
         {
             Metrics.AddBytesSent(byteCount);
+            _serverMetrics?.RecordMessageSent(byteCount);
         }
     }
 
@@ -197,6 +201,7 @@ public sealed class WebSocketSession : ISession
         if (byteCount > 0)
         {
             Metrics.AddBytesSent(byteCount);
+            _serverMetrics?.RecordMessageSent(byteCount);
         }
     }
 

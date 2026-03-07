@@ -41,4 +41,7 @@ public enum DisconnectReason
 
     /// <summary>The session was closed because no application-level data was received within the configured idle timeout.</summary>
     IdleTimeout,
+
+    /// <summary>The session sent a message exceeding the configured <c>MaxMessageSize</c> limit (RFC 6455 status 1009).</summary>
+    MessageTooBig,
 }

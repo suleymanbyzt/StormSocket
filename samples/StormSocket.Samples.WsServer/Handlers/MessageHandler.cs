@@ -65,6 +65,8 @@ public sealed class MessageHandler
         {
             _server.Groups.RemoveFromAll(session);
             await _broadcast.SystemMessageAsync($"{user!.Name} left (online: {_server.Sessions.Count})");
+            
+            Console.WriteLine($"[Disconnected] #{session.Id} ({session.RemoteEndPoint}) reason: {reason}");
         }
     }
 
