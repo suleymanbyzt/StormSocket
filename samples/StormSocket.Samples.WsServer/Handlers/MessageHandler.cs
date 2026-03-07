@@ -65,8 +65,6 @@ public sealed class MessageHandler
         {
             _server.Groups.RemoveFromAll(session);
             await _broadcast.SystemMessageAsync($"{user!.Name} left (online: {_server.Sessions.Count})");
-            
-            Console.WriteLine($"[Disconnected] #{session.Id} ({session.RemoteEndPoint}) reason: {reason}");
         }
     }
 
@@ -289,13 +287,11 @@ public sealed class MessageHandler
     {
         ConnectedUser? user = _users.Get(session.Id);
         string name = user?.Name ?? $"#{session.Id}";
-        Console.WriteLine($"[RateLimit] {name} ({session.RemoteEndPoint}) exceeded limit");
         await _broadcast.SystemMessageAsync($"{name} was disconnected (rate limit exceeded)");
     }
 
     private ValueTask OnError(ISession? session, Exception ex)
     {
-        Console.WriteLine($"  [ERROR] #{session?.Id}: {ex.Message}");
         return ValueTask.CompletedTask;
     }
 }
