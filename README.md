@@ -45,7 +45,8 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **[Per-session user data](docs/features.md#per-session-user-data)** - `session.Items` dictionary + strongly-typed `session.Get<T>` / `session.Set<T>` via `SessionKey<T>` — no external dictionary needed
 - **Slow consumer detection** - `SlowConsumerPolicy` per session: `Wait` (block), `Drop` (skip), or `Disconnect` (close)
 - **Message fragmentation** - automatic reassembly of fragmented WebSocket messages (RFC 6455 Section 5.4) with `MaxMessageSize` limit and send-side fragmentation helpers
-- **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`)
+- **Connection idle timeout** - automatically close connections that haven't sent any application-level data within a configurable period (ping/pong does NOT reset the timer)
+- **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`, `IdleTimeout`)
 - **Handshake timeout** - configurable timeout for WebSocket upgrade (DoS protection)
 - **TCP Keep-Alive** - fine-tuning options (idle time, probe interval, probe count)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
@@ -173,13 +174,26 @@ var server = new StormWebSocketServer(new ServerOptions
 });
 ```
 
+### Idle Timeout
+
+```csharp
+var server = new StormWebSocketServer(new ServerOptions
+{
+    WebSocket = new WebSocketOptions
+    {
+        IdleTimeout = TimeSpan.FromMinutes(5), // close if no data for 5 min
+    },
+});
+// ping/pong does NOT reset the timer — only real messages count
+```
+
 ### Disconnect Reasons
 
 ```csharp
 ws.OnDisconnected += async (session, reason) =>
 {
     // ClosedByClient | ClosedByServer | HeartbeatTimeout | SlowConsumer
-    // ProtocolError | TransportError | RateLimited | GoingAway | ...
+    // ProtocolError | TransportError | RateLimited | GoingAway | IdleTimeout | ...
     Console.WriteLine($"#{session.Id}: {reason}");
 };
 ```
