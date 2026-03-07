@@ -156,7 +156,7 @@ public class TcpServerIntegrationTests
             using TcpClient slowClient = new TcpClient();
             slowClient.ReceiveBufferSize = 1024; // small OS buffer to fill faster
             await slowClient.ConnectAsync(IPAddress.Loopback, port);
-            ISession slowSession = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            ISession slowNetworkSession = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             // Fire-and-forget: flood data until pipe fills up and IsBackpressured = true
             byte[] chunk = new byte[4096];
@@ -167,7 +167,7 @@ public class TcpServerIntegrationTests
                 {
                     try
                     {
-                        await slowSession.SendAsync(chunk, floodCts.Token);
+                        await slowNetworkSession.SendAsync(chunk, floodCts.Token);
                     }
                     catch { break; }
                 }
@@ -178,7 +178,7 @@ public class TcpServerIntegrationTests
             for (int i = 0; i < 200; i++)
             {
                 await Task.Delay(25);
-                if (slowSession.IsBackpressured)
+                if (slowNetworkSession.IsBackpressured)
                 {
                     backpressured = true;
                     break;
@@ -188,7 +188,7 @@ public class TcpServerIntegrationTests
             Assert.True(backpressured, "Slow client should be backpressured");
 
             // With Drop policy, session stays connected but sends are skipped
-            Assert.Equal(ConnectionState.Connected, slowSession.State);
+            Assert.Equal(ConnectionState.Connected, slowNetworkSession.State);
 
             floodCts.Cancel();
         }
@@ -223,7 +223,7 @@ public class TcpServerIntegrationTests
             using TcpClient slowClient = new TcpClient();
             slowClient.ReceiveBufferSize = 1024;
             await slowClient.ConnectAsync(IPAddress.Loopback, port);
-            ISession slowSession = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            ISession slowNetworkSession = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             // Fire-and-forget: flood data until backpressure triggers Disconnect
             byte[] chunk = new byte[1024 * 32];
@@ -234,7 +234,7 @@ public class TcpServerIntegrationTests
                 {
                     try
                     {
-                        await slowSession.SendAsync(chunk, floodCts.Token);
+                        await slowNetworkSession.SendAsync(chunk, floodCts.Token);
                     }
                     catch
                     {

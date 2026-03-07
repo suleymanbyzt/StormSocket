@@ -18,9 +18,9 @@ public sealed class BroadcastHelper
         _server = server;
     }
 
-    public async ValueTask SendAsync(ISession session, object payload)
+    public async ValueTask SendAsync(ISession networkSession, object payload)
     {
-        if (session is WebSocketSession ws && session.State == ConnectionState.Connected)
+        if (networkSession is WebSocketSession ws && networkSession.State == ConnectionState.Connected)
         {
             string json = JsonSerializer.Serialize(payload);
             await ws.SendTextAsync(json);

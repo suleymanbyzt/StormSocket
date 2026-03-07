@@ -42,37 +42,37 @@ public sealed class MessageHandler
         _server.OnError += OnError;
     }
 
-    private async ValueTask OnConnected(ISession session)
+    private async ValueTask OnConnected(ISession networkSession)
     {
-        ConnectedUser user = _users.Add(session);
-        session.Set(UserKey, user);
-        _server.Groups.Add("lobby", session);
+        ConnectedUser user = _users.Add(networkSession);
+        networkSession.Set(UserKey, user);
+        _server.Groups.Add("lobby", networkSession);
 
-        await _broadcast.SendAsync(session, new
+        await _broadcast.SendAsync(networkSession, new
         {
             type = "welcome",
-            id = session.Id,
+            id = networkSession.Id,
             message = "Connected. Commands: setName, chat, whisper, join, leave, roomMsg, list, rooms, myInfo",
             online = _server.Sessions.Count,
         });
 
-        await _broadcast.SystemMessageAsync($"#{session.Id} joined (online: {_server.Sessions.Count})");
+        await _broadcast.SystemMessageAsync($"#{networkSession.Id} joined (online: {_server.Sessions.Count})");
     }
 
-    private async ValueTask OnDisconnected(ISession session, DisconnectReason reason)
+    private async ValueTask OnDisconnected(ISession networkSession, DisconnectReason reason)
     {
-        if (_users.Remove(session.Id, out ConnectedUser? user))
+        if (_users.Remove(networkSession.Id, out ConnectedUser? user))
         {
-            _server.Groups.RemoveFromAll(session);
+            _server.Groups.RemoveFromAll(networkSession);
             await _broadcast.SystemMessageAsync($"{user!.Name} left (online: {_server.Sessions.Count})");
         }
     }
 
-    private async ValueTask OnMessage(ISession session, WsMessage msg)
+    private async ValueTask OnMessage(ISession networkSession, WsMessage msg)
     {
         if (!msg.IsText) return;
 
-        ConnectedUser? user = session.Get(UserKey);
+        ConnectedUser? user = networkSession.Get(UserKey);
         if (user is null) return;
 
         string text = msg.Text.Trim();
@@ -86,34 +86,34 @@ public sealed class MessageHandler
             switch (type)
             {
                 case "setName":
-                    await OnSetName(session, user, root); break;
+                    await OnSetName(networkSession, user, root); break;
                 
                 case "chat":
-                    await OnChat(session, user, root); break;
+                    await OnChat(networkSession, user, root); break;
                 
                 case "whisper":
-                    await OnWhisper(session, user, root); break;
+                    await OnWhisper(networkSession, user, root); break;
                 
                 case "join":
-                    await OnJoinRoom(session, user, root); break;
+                    await OnJoinRoom(networkSession, user, root); break;
                 
                 case "leave":
-                    await OnLeaveRoom(session, user, root); break;
+                    await OnLeaveRoom(networkSession, user, root); break;
                 
                 case "roomMsg":
-                    await OnRoomMessage(session, user, root); break;
+                    await OnRoomMessage(networkSession, user, root); break;
                 
                 case "list":
-                    await OnListUsers(session); break;
+                    await OnListUsers(networkSession); break;
                 
                 case "rooms":
-                    await OnListRooms(session); break;
+                    await OnListRooms(networkSession); break;
                 
                 case "myInfo":
-                    await OnMyInfo(session, user); break;
+                    await OnMyInfo(networkSession, user); break;
                 
                 default:
-                    await _broadcast.SendAsync(session, new { type = "error", message = $"Unknown: {type}" });
+                    await _broadcast.SendAsync(networkSession, new { type = "error", message = $"Unknown: {type}" });
                     break;
             }
         }
@@ -125,33 +125,33 @@ public sealed class MessageHandler
                 from = user.Name,
                 room = "lobby",
                 message = text,
-            }, excludeId: session.Id);
+            }, excludeId: networkSession.Id);
         }
     }
 
-    private async ValueTask OnSetName(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnSetName(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         string? name = root.GetProperty("name").GetString()?.Trim();
         if (string.IsNullOrEmpty(name))
         {
-            await _broadcast.SendAsync(session, new { type = "error", message = "Name cannot be empty." });
+            await _broadcast.SendAsync(networkSession, new { type = "error", message = "Name cannot be empty." });
             return;
         }
 
-        if (_users.IsNameTaken(name, excludeId: session.Id))
+        if (_users.IsNameTaken(name, excludeId: networkSession.Id))
         {
-            await _broadcast.SendAsync(session, new { type = "error", message = $"'{name}' is taken." });
+            await _broadcast.SendAsync(networkSession, new { type = "error", message = $"'{name}' is taken." });
             return;
         }
 
         string old = user.Name;
         user.Name = name;
 
-        await _broadcast.SendAsync(session, new { type = "nameSet", name });
+        await _broadcast.SendAsync(networkSession, new { type = "nameSet", name });
         await _broadcast.SystemMessageAsync($"{old} is now known as {name}");
     }
 
-    private async ValueTask OnChat(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnChat(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         string? message = root.GetProperty("message").GetString();
         if (string.IsNullOrWhiteSpace(message)) return;
@@ -162,10 +162,10 @@ public sealed class MessageHandler
             from = user.Name,
             room = "lobby",
             message,
-        }, excludeId: session.Id);
+        }, excludeId: networkSession.Id);
     }
 
-    private async ValueTask OnWhisper(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnWhisper(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         long targetId = root.GetProperty("to").GetInt64();
         string? message = root.GetProperty("message").GetString();
@@ -174,28 +174,28 @@ public sealed class MessageHandler
         ConnectedUser? target = _users.Get(targetId);
         if (target is null)
         {
-            await _broadcast.SendAsync(session, new { type = "error", message = $"#{targetId} not found." });
+            await _broadcast.SendAsync(networkSession, new { type = "error", message = $"#{targetId} not found." });
             return;
         }
 
-        await _broadcast.SendAsync(target.Session, new
+        await _broadcast.SendAsync(target.NetworkSession, new
         {
             type = "whisper",
             from = user.Name,
-            fromId = session.Id,
+            fromId = networkSession.Id,
             message,
         });
-        await _broadcast.SendAsync(session, new { type = "whisperSent", to = targetId, message });
+        await _broadcast.SendAsync(networkSession, new { type = "whisperSent", to = targetId, message });
     }
 
-    private async ValueTask OnJoinRoom(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnJoinRoom(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         string? room = root.GetProperty("room").GetString()?.Trim();
         if (string.IsNullOrEmpty(room)) return;
 
-        _server.Groups.Add(room, session);
+        _server.Groups.Add(room, networkSession);
 
-        await _broadcast.SendAsync(session, new
+        await _broadcast.SendAsync(networkSession, new
         {
             type = "joined",
             room,
@@ -205,17 +205,17 @@ public sealed class MessageHandler
         {
             type = "system",
             message = $"{user.Name} joined '{room}'",
-        }, excludeId: session.Id);
+        }, excludeId: networkSession.Id);
     }
 
-    private async ValueTask OnLeaveRoom(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnLeaveRoom(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         string? room = root.GetProperty("room").GetString()?.Trim();
         if (string.IsNullOrEmpty(room) || room == "lobby") return;
 
-        _server.Groups.Remove(room, session);
+        _server.Groups.Remove(room, networkSession);
 
-        await _broadcast.SendAsync(session, new { type = "left", room });
+        await _broadcast.SendAsync(networkSession, new { type = "left", room });
         await _broadcast.BroadcastToRoomAsync(room, new
         {
             type = "system",
@@ -223,15 +223,15 @@ public sealed class MessageHandler
         });
     }
 
-    private async ValueTask OnRoomMessage(ISession session, ConnectedUser user, JsonElement root)
+    private async ValueTask OnRoomMessage(ISession networkSession, ConnectedUser user, JsonElement root)
     {
         string? room = root.GetProperty("room").GetString();
         string? message = root.GetProperty("message").GetString();
         if (string.IsNullOrWhiteSpace(room) || string.IsNullOrWhiteSpace(message)) return;
 
-        if (!session.Groups.Contains(room))
+        if (!networkSession.Groups.Contains(room))
         {
-            await _broadcast.SendAsync(session, new { type = "error", message = $"Not in room '{room}'." });
+            await _broadcast.SendAsync(networkSession, new { type = "error", message = $"Not in room '{room}'." });
             return;
         }
 
@@ -241,23 +241,23 @@ public sealed class MessageHandler
             from = user.Name,
             room,
             message,
-        }, excludeId: session.Id);
+        }, excludeId: networkSession.Id);
     }
 
-    private async ValueTask OnListUsers(ISession session)
+    private async ValueTask OnListUsers(ISession networkSession)
     {
         var list = _users.All.Select(u => new
         {
             id = u.Id,
             name = u.Name,
-            uptime = u.Session.Metrics.Uptime.ToString(@"hh\:mm\:ss"),
-            groups = u.Session.Groups.ToArray(),
+            uptime = u.NetworkSession.Metrics.Uptime.ToString(@"hh\:mm\:ss"),
+            groups = u.NetworkSession.Groups.ToArray(),
         });
 
-        await _broadcast.SendAsync(session, new { type = "userList", users = list, total = _server.Sessions.Count });
+        await _broadcast.SendAsync(networkSession, new { type = "userList", users = list, total = _server.Sessions.Count });
     }
 
-    private async ValueTask OnListRooms(ISession session)
+    private async ValueTask OnListRooms(ISession networkSession)
     {
         var list = _server.Groups.GroupNames.Select(r => new
         {
@@ -265,29 +265,29 @@ public sealed class MessageHandler
             members = _server.Groups.MemberCount(r),
         });
 
-        await _broadcast.SendAsync(session, new { type = "roomList", rooms = list });
+        await _broadcast.SendAsync(networkSession, new { type = "roomList", rooms = list });
     }
 
-    private async ValueTask OnMyInfo(ISession session, ConnectedUser user)
+    private async ValueTask OnMyInfo(ISession networkSession, ConnectedUser user)
     {
-        await _broadcast.SendAsync(session, new
+        await _broadcast.SendAsync(networkSession, new
         {
             type = "myInfo",
-            id = session.Id,
+            id = networkSession.Id,
             name = user.Name,
-            state = session.State.ToString(),
-            uptime = session.Metrics.Uptime.ToString(@"hh\:mm\:ss"),
-            bytesSent = session.Metrics.BytesSent,
-            bytesReceived = session.Metrics.BytesReceived,
-            groups = session.Groups.ToArray(),
+            state = networkSession.State.ToString(),
+            uptime = networkSession.Metrics.Uptime.ToString(@"hh\:mm\:ss"),
+            bytesSent = networkSession.Metrics.BytesSent,
+            bytesReceived = networkSession.Metrics.BytesReceived,
+            groups = networkSession.Groups.ToArray(),
         });
     }
 
-    private async ValueTask OnRateLimitExceeded(ISession session)
+    private async ValueTask OnRateLimitExceeded(ISession networkSession)
     {
-        ConnectedUser? user = _users.Get(session.Id);
-        string name = user?.Name ?? $"#{session.Id}";
-        Console.WriteLine($"[RateLimit] {name} ({session.RemoteEndPoint}) exceeded limit");
+        ConnectedUser? user = _users.Get(networkSession.Id);
+        string name = user?.Name ?? $"#{networkSession.Id}";
+        Console.WriteLine($"[RateLimit] {name} ({networkSession.RemoteEndPoint}) exceeded limit");
         await _broadcast.SystemMessageAsync($"{name} was disconnected (rate limit exceeded)");
     }
 

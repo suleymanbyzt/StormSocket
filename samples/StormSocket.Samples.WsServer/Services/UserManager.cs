@@ -11,10 +11,10 @@ public sealed class UserManager
     public int Count => _users.Count;
     public IEnumerable<ConnectedUser> All => _users.Values;
 
-    public ConnectedUser Add(ISession session)
+    public ConnectedUser Add(ISession networkSession)
     {
-        ConnectedUser user = new() { Session = session };
-        _users.TryAdd(session.Id, user);
+        ConnectedUser user = new() { NetworkSession = networkSession };
+        _users.TryAdd(networkSession.Id, user);
         return user;
     }
 

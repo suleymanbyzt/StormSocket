@@ -5,7 +5,7 @@ using StormSocket.Session;
 namespace StormSocket.Client;
 
 /// <summary>
-/// Internal adapter that allows a client to satisfy the ISession interface
+/// Internal adapter that allows a client to satisfy the IConnectionSession interface
 /// required by MiddlewarePipeline. Not exposed publicly.
 /// </summary>
 internal sealed class ClientSessionAdapter : ISession

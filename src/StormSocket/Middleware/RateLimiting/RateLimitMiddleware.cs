@@ -58,23 +58,23 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
         _windowMs = (long)options.Window.TotalMilliseconds;
     }
 
-    public ValueTask<ReadOnlyMemory<byte>> OnDataReceivedAsync(ISession session, ReadOnlyMemory<byte> data)
+    public ValueTask<ReadOnlyMemory<byte>> OnDataReceivedAsync(ISession networkSession, ReadOnlyMemory<byte> data)
     {
-        RateLimitEntry entry = GetEntry(session);
+        RateLimitEntry entry = GetEntry(networkSession);
 
         if (entry.TryAcquire(_windowMs, _options.MaxMessages))
         {
             return ValueTask.FromResult(data);
         }
 
-        return HandleExceededAsync(session);
+        return HandleExceededAsync(networkSession);
     }
 
-    public ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
+    public ValueTask OnDisconnectedAsync(ISession networkSession, DisconnectReason reason)
     {
         if (_options.Scope == RateLimitScope.IpAddress)
         {
-            IPAddress? ip = GetIpAddress(session);
+            IPAddress? ip = GetIpAddress(networkSession);
             if (ip is not null && _ipEntries.TryGetValue(ip, out RateLimitEntry? entry) && entry.DecrementSessions() <= 0)
             {
                 _ipEntries.TryRemove(ip, out _);
@@ -82,41 +82,41 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
         }
         else
         {
-            _sessionEntries.TryRemove(session.Id, out _);
+            _sessionEntries.TryRemove(networkSession.Id, out _);
         }
 
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnConnectedAsync(ISession session)
+    public ValueTask OnConnectedAsync(ISession networkSession)
     {
         if (_options.Scope == RateLimitScope.IpAddress)
         {
-            RateLimitEntry entry = GetEntry(session);
+            RateLimitEntry entry = GetEntry(networkSession);
             entry.IncrementSessions();
         }
 
         return ValueTask.CompletedTask;
     }
 
-    private async ValueTask<ReadOnlyMemory<byte>> HandleExceededAsync(ISession session)
+    private async ValueTask<ReadOnlyMemory<byte>> HandleExceededAsync(ISession networkSession)
     {
-        _logger?.LogWarning("Rate limit exceeded for session {SessionId}, action: {Action}", session.Id, _options.ExceededAction);
+        _logger?.LogWarning("Rate limit exceeded for session {SessionId}, action: {Action}", networkSession.Id, _options.ExceededAction);
 
         if (OnExceeded is not null)
         {
-            await OnExceeded.Invoke(session).ConfigureAwait(false);
+            await OnExceeded.Invoke(networkSession).ConfigureAwait(false);
         }
 
         if (_options.ExceededAction == RateLimitAction.Disconnect)
         {
-            if (session is TcpSession tcp) tcp.SetDisconnectReason(DisconnectReason.RateLimited);
-            else if (session is WebSocketSession ws) ws.SetDisconnectReason(DisconnectReason.RateLimited);
-            session.Abort();
+            if (networkSession is TcpSession tcp) tcp.SetDisconnectReason(DisconnectReason.RateLimited);
+            else if (networkSession is WebSocketSession ws) ws.SetDisconnectReason(DisconnectReason.RateLimited);
+            networkSession.Abort();
 
             if (_options.Scope == RateLimitScope.IpAddress)
             {
-                IPAddress? ip = GetIpAddress(session);
+                IPAddress? ip = GetIpAddress(networkSession);
                 if (ip is not null)
                 {
                     _ipEntries.TryRemove(ip, out _);
@@ -124,27 +124,27 @@ public sealed class RateLimitMiddleware : IConnectionMiddleware
             }
             else
             {
-                _sessionEntries.TryRemove(session.Id, out _);
+                _sessionEntries.TryRemove(networkSession.Id, out _);
             }
         }
 
         return ReadOnlyMemory<byte>.Empty;
     }
 
-    private RateLimitEntry GetEntry(ISession session)
+    private RateLimitEntry GetEntry(ISession networkSession)
     {
         if (_options.Scope == RateLimitScope.IpAddress)
         {
-            IPAddress ip = GetIpAddress(session) ?? IPAddress.None;
+            IPAddress ip = GetIpAddress(networkSession) ?? IPAddress.None;
             return _ipEntries.GetOrAdd(ip, static _ => new RateLimitEntry());
         }
 
-        return _sessionEntries.GetOrAdd(session.Id, static _ => new RateLimitEntry());
+        return _sessionEntries.GetOrAdd(networkSession.Id, static _ => new RateLimitEntry());
     }
 
-    private static IPAddress? GetIpAddress(ISession session)
+    private static IPAddress? GetIpAddress(ISession networkSession)
     {
-        return session.RemoteEndPoint is IPEndPoint ep ? ep.Address : null;
+        return networkSession.RemoteEndPoint is IPEndPoint ep ? ep.Address : null;
     }
 
     private sealed class RateLimitEntry

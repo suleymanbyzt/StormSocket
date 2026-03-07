@@ -5,21 +5,21 @@ namespace StormSocket.Samples.WsServer.Middleware;
 
 public sealed class LoggingMiddleware : IConnectionMiddleware
 {
-    public ValueTask OnConnectedAsync(ISession session)
+    public ValueTask OnConnectedAsync(ISession networkSession)
     {
-        Console.WriteLine($"  [MW] #{session.Id} connected");
+        Console.WriteLine($"  [MW] #{networkSession.Id} connected");
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnDisconnectedAsync(ISession session)
+    public ValueTask OnDisconnectedAsync(ISession networkSession)
     {
-        Console.WriteLine($"  [MW] #{session.Id} disconnected  up={session.Metrics.Uptime:hh\\:mm\\:ss}  tx={session.Metrics.BytesSent}B  rx={session.Metrics.BytesReceived}B");
+        Console.WriteLine($"  [MW] #{networkSession.Id} disconnected  up={networkSession.Metrics.Uptime:hh\\:mm\\:ss}  tx={networkSession.Metrics.BytesSent}B  rx={networkSession.Metrics.BytesReceived}B");
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnErrorAsync(ISession session, Exception ex)
+    public ValueTask OnErrorAsync(ISession networkSession, Exception ex)
     {
-        Console.WriteLine($"  [MW] #{session.Id} error: {ex.Message}");
+        Console.WriteLine($"  [MW] #{networkSession.Id} error: {ex.Message}");
         return ValueTask.CompletedTask;
     }
 }

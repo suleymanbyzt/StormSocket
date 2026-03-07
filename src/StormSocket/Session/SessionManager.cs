@@ -7,27 +7,27 @@ namespace StormSocket.Session;
 /// </summary>
 public sealed class SessionManager
 {
-    private readonly ConcurrentDictionary<long, ISession> _sessions = new();
+    private readonly ConcurrentDictionary<long, INetworkSession> _networkSessions = new();
 
     /// <summary>Number of currently connected sessions.</summary>
-    public int Count => _sessions.Count;
+    public int Count => _networkSessions.Count;
 
     /// <summary>Enumerates all active sessions (snapshot-safe).</summary>
-    public IEnumerable<ISession> All => _sessions.Values;
+    public IEnumerable<INetworkSession> All => _networkSessions.Values;
 
-    public bool TryAdd(ISession session) => _sessions.TryAdd(session.Id, session);
+    public bool TryAdd(INetworkSession networkSession) => _networkSessions.TryAdd(networkSession.Id, networkSession);
 
-    public bool TryRemove(long id, out ISession? session)
+    public bool TryRemove(long id, out INetworkSession? networkSession)
     {
-        bool result = _sessions.TryRemove(id, out ISession? s);
-        session = s;
+        bool result = _networkSessions.TryRemove(id, out INetworkSession? s);
+        networkSession = s;
         return result;
     }
 
-    public bool TryGet(long id, out ISession? session)
+    public bool TryGet(long id, out INetworkSession? networkSession)
     {
-        bool result = _sessions.TryGetValue(id, out ISession? s);
-        session = s;
+        bool result = _networkSessions.TryGetValue(id, out INetworkSession? s);
+        networkSession = s;
         return result;
     }
 
@@ -39,14 +39,14 @@ public sealed class SessionManager
     public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, long? excludeId = null, CancellationToken cancellationToken = default)
     {
         List<ValueTask> tasks = [];
-        foreach (ISession session in _sessions.Values)
+        foreach (INetworkSession networkSession in _networkSessions.Values)
         {
-            if (session.Id == excludeId)
+            if (networkSession.Id == excludeId)
             {
                 continue;
             }
 
-            tasks.Add(session.SendAsync(data, cancellationToken));
+            tasks.Add(networkSession.SendAsync(data, cancellationToken));
         }
 
         foreach (ValueTask task in tasks)
@@ -62,13 +62,16 @@ public sealed class SessionManager
         }
     }
 
-    /// <summary>Gracefully closes all sessions (used during server shutdown).</summary>
+    /// <summary>Gracefully closes all connection-oriented sessions (used during server shutdown).</summary>
     public async ValueTask CloseAllAsync(CancellationToken cancellationToken = default)
     {
         List<ValueTask> tasks = [];
-        foreach (ISession session in _sessions.Values)
+        foreach (INetworkSession networkSession in _networkSessions.Values)
         {
-            tasks.Add(session.CloseAsync(cancellationToken));
+            if (networkSession is ISession connSession)
+            {
+                tasks.Add(connSession.CloseAsync(cancellationToken));
+            }
         }
 
         foreach (ValueTask task in tasks)
@@ -84,6 +87,6 @@ public sealed class SessionManager
             }
         }
 
-        _sessions.Clear();
+        _networkSessions.Clear();
     }
 }

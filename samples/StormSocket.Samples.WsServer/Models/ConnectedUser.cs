@@ -4,14 +4,14 @@ namespace StormSocket.Samples.WsServer.Models;
 
 public sealed class ConnectedUser
 {
-    public required ISession Session { get; init; }
+    public required ISession NetworkSession { get; init; }
     
     public string Name { get; set; } = "anonymous";
     
     
     public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UtcNow;
 
-    public WebSocketSession Ws => (WebSocketSession)Session;
+    public WebSocketSession Ws => (WebSocketSession)NetworkSession;
     
-    public long Id => Session.Id;
+    public long Id => NetworkSession.Id;
 }
