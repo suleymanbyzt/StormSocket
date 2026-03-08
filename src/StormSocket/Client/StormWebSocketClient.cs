@@ -300,10 +300,26 @@ public class StormWebSocketClient : IAsyncDisposable
                     _logger.LogWarning("Client {Reason}: {Message}", reason, ex.Message);
                     _disconnectReason = reason;
                     await WriteFrameAsync(writer => WsFrameEncoder.WriteMaskedClose(writer, ex.CloseStatus), cancellationToken: ct);
-                    await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
+
+                    try
+                    {
+                        await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
+                    }
+                    catch (Exception mwEx)
+                    {
+                        _logger.LogError(mwEx, "Middleware OnError exception");
+                    }
+
                     if (OnError is not null)
                     {
-                        await OnError.Invoke(ex).ConfigureAwait(false);
+                        try
+                        {
+                            await OnError.Invoke(ex).ConfigureAwait(false);
+                        }
+                        catch (Exception handlerEx)
+                        {
+                            _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+                        }
                     }
 
                     break;
@@ -323,10 +339,26 @@ public class StormWebSocketClient : IAsyncDisposable
             if (_disconnectReason == DisconnectReason.None)
                 _disconnectReason = DisconnectReason.TransportError;
             _logger.LogError(ex, "Transport error");
-            await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
+
+            try
+            {
+                await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
+            }
+            catch (Exception mwEx)
+            {
+                _logger.LogError(mwEx, "Middleware OnError exception");
+            }
+
             if (OnError is not null)
             {
-                await OnError.Invoke(ex).ConfigureAwait(false);
+                try
+                {
+                    await OnError.Invoke(ex).ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+                }
             }
         }
         finally
@@ -345,10 +377,26 @@ public class StormWebSocketClient : IAsyncDisposable
 
             DisconnectReason reason = _disconnectReason;
             _logger.LogInformation("Disconnected: {Reason}", reason);
-            await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
+
+            try
+            {
+                await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
+            }
+            catch (Exception mwEx)
+            {
+                _logger.LogError(mwEx, "Middleware OnDisconnected exception");
+            }
+
             if (OnDisconnected is not null)
             {
-                await OnDisconnected.Invoke(reason).ConfigureAwait(false);
+                try
+                {
+                    await OnDisconnected.Invoke(reason).ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnDisconnected handler");
+                }
             }
 
             if (_transport is not null)
@@ -371,7 +419,14 @@ public class StormWebSocketClient : IAsyncDisposable
 
         if (OnMessageReceived is not null)
         {
-            await OnMessageReceived.Invoke(msg).ConfigureAwait(false);
+            try
+            {
+                await OnMessageReceived.Invoke(msg).ConfigureAwait(false);
+            }
+            catch (Exception handlerEx)
+            {
+                _logger.LogError(handlerEx, "Unhandled exception in OnMessageReceived handler");
+            }
         }
     }
 
@@ -416,7 +471,16 @@ public class StormWebSocketClient : IAsyncDisposable
         // Fast path: try to acquire lock synchronously (no contention)
         if (_writeLock.Wait(0))
         {
-            writeAction(_transport.Output);
+            try
+            {
+                writeAction(_transport.Output);
+            }
+            catch
+            {
+                _writeLock.Release();
+                throw;
+            }
+
             ValueTask<FlushResult> flushTask = _transport.Output.FlushAsync(cancellationToken);
             if (flushTask.IsCompletedSuccessfully)
             {

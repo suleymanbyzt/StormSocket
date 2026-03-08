@@ -260,14 +260,28 @@ public class StormTcpServer : IAsyncDisposable
 
                     if (OnDataReceived is not null)
                     {
-                        await OnDataReceived.Invoke(session, processed).ConfigureAwait(false);
+                        try
+                        {
+                            await OnDataReceived.Invoke(session, processed).ConfigureAwait(false);
+                        }
+                        catch (Exception handlerEx)
+                        {
+                            _logger.LogError(handlerEx, "Unhandled exception in OnDataReceived handler for session {SessionId}", session.Id);
+                        }
                     }
                 },
                 async ex =>
                 {
                     if (OnError is not null)
                     {
-                        await OnError.Invoke(session, ex).ConfigureAwait(false);
+                        try
+                        {
+                            await OnError.Invoke(session, ex).ConfigureAwait(false);
+                        }
+                        catch (Exception handlerEx)
+                        {
+                            _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+                        }
                     }
                 });
 
@@ -299,7 +313,14 @@ public class StormTcpServer : IAsyncDisposable
             await _pipeline.OnConnectedAsync(session).ConfigureAwait(false);
             if (OnConnected is not null)
             {
-                await OnConnected.Invoke(session).ConfigureAwait(false);
+                try
+                {
+                    await OnConnected.Invoke(session).ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnConnected handler for session {SessionId}", session.Id);
+                }
             }
 
             await connection.RunAsync(ct).ConfigureAwait(false);
@@ -312,12 +333,27 @@ public class StormTcpServer : IAsyncDisposable
             {
                 session.SetDisconnectReason(DisconnectReason.TransportError);
                 _logger.LogError(ex, "Session {SessionId} error", session.Id);
-                await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
+
+                try
+                {
+                    await _pipeline.OnErrorAsync(session, ex).ConfigureAwait(false);
+                }
+                catch (Exception mwEx)
+                {
+                    _logger.LogError(mwEx, "Middleware OnError exception for session {SessionId}", session.Id);
+                }
             }
 
             if (OnError is not null)
             {
-                await OnError.Invoke(session, ex).ConfigureAwait(false);
+                try
+                {
+                    await OnError.Invoke(session, ex).ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+                }
             }
         }
         finally
@@ -334,11 +370,26 @@ public class StormTcpServer : IAsyncDisposable
 
                 DisconnectReason reason = session.DisconnectReason;
                 _logger.LogDebug("Session {SessionId} disconnected: {Reason}", session.Id, reason);
-                await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
+
+                try
+                {
+                    await _pipeline.OnDisconnectedAsync(session, reason).ConfigureAwait(false);
+                }
+                catch (Exception mwEx)
+                {
+                    _logger.LogError(mwEx, "Middleware OnDisconnected exception for session {SessionId}", session.Id);
+                }
 
                 if (OnDisconnected is not null)
                 {
-                    await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
+                    try
+                    {
+                        await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
+                    }
+                    catch (Exception handlerEx)
+                    {
+                        _logger.LogError(handlerEx, "Unhandled exception in OnDisconnected handler for session {SessionId}", session.Id);
+                    }
                 }
 
                 await session.DisposeAsync().ConfigureAwait(false);

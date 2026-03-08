@@ -118,7 +118,16 @@ public sealed class WebSocketSession : ISession
         // Fast path: try to acquire lock synchronously (no contention)
         if (_writeLock.Wait(0))
         {
-            writeAction(_transport.Output);
+            try
+            {
+                writeAction(_transport.Output);
+            }
+            catch
+            {
+                _writeLock.Release();
+                throw;
+            }
+
             ValueTask<FlushResult> flushTask = _transport.Output.FlushAsync(cancellationToken);
             if (flushTask.IsCompletedSuccessfully)
             {
