@@ -49,6 +49,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`, `IdleTimeout`, `MessageTooBig`)
 - **Handshake timeout** - configurable timeout for WebSocket upgrade (DoS protection)
 - **TCP Keep-Alive** - fine-tuning options (idle time, probe interval, probe count)
+- **Unix domain socket** transport — same API, just pass `UnixDomainSocketEndPoint` for fast local IPC (container-to-container, sidecar proxy)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
 - **Server metrics** - `server.Metrics` exposes active connections, total connections, messages sent/received, bytes, errors — built on `System.Diagnostics.Metrics` for native OpenTelemetry/Prometheus/`dotnet-counters` integration
 - **Structured logging** via `ILoggerFactory` — zero overhead when disabled, structured output when enabled
@@ -172,6 +173,22 @@ var server = new StormWebSocketServer(new ServerOptions
 {
     SlowConsumerPolicy = SlowConsumerPolicy.Drop, // Wait | Drop | Disconnect
     MaxConnections = 50_000,
+});
+```
+
+### Unix Domain Socket
+
+```csharp
+// Server — fast local IPC, skips the TCP/IP stack entirely
+var server = new StormTcpServer(new ServerOptions
+{
+    EndPoint = new UnixDomainSocketEndPoint("/tmp/myapp.sock"),
+});
+
+// Client
+var client = new StormTcpClient(new ClientOptions
+{
+    EndPoint = new UnixDomainSocketEndPoint("/tmp/myapp.sock"),
 });
 ```
 

@@ -10,8 +10,12 @@ namespace StormSocket.Server;
 /// </summary>
 public sealed class ServerOptions
 {
-    /// <summary>IP and port to listen on. Default: 0.0.0.0:5000.</summary>
-    public IPEndPoint EndPoint { get; init; } = new(IPAddress.Any, 5000);
+    /// <summary>
+    /// Endpoint to listen on. Accepts <see cref="IPEndPoint"/> for TCP/IP or
+    /// <see cref="System.Net.Sockets.UnixDomainSocketEndPoint"/> for Unix domain sockets.
+    /// Default: 0.0.0.0:5000.
+    /// </summary>
+    public EndPoint EndPoint { get; init; } = new IPEndPoint(IPAddress.Any, 5000);
 
     /// <summary>Maximum pending connection queue length. Default: 128.</summary>
     public int Backlog { get; init; } = 128;

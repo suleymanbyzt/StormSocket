@@ -114,7 +114,13 @@ public class StormTcpServer : IAsyncDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        if (_options.DualMode)
+        bool isUnix = _options.EndPoint is UnixDomainSocketEndPoint;
+
+        if (isUnix)
+        {
+            _listenSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        }
+        else if (_options.DualMode)
         {
             _listenSocket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
             _listenSocket.DualMode = true;
@@ -124,16 +130,31 @@ public class StormTcpServer : IAsyncDisposable
             _listenSocket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         }
 
-        _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-
-        if (_options.Socket.NoDelay)
+        if (!isUnix)
         {
-            _listenSocket.NoDelay = true;
+            _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
+            if (_options.Socket.NoDelay)
+            {
+                _listenSocket.NoDelay = true;
+            }
         }
 
-        IPEndPoint bindEndPoint = _options.DualMode
-            ? new IPEndPoint(IPAddress.IPv6Any, _options.EndPoint.Port)
-            : _options.EndPoint;
+        EndPoint bindEndPoint = isUnix
+            ? _options.EndPoint
+            : _options.DualMode
+                ? new IPEndPoint(IPAddress.IPv6Any, ((IPEndPoint)_options.EndPoint).Port)
+                : _options.EndPoint;
+
+        // Remove stale socket file for Unix domain sockets
+        if (isUnix && _options.EndPoint is UnixDomainSocketEndPoint udsEndPoint)
+        {
+            string? path = udsEndPoint.ToString();
+            if (path is not null && File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
 
         _listenSocket.Bind(bindEndPoint);
         _listenSocket.Listen(_options.Backlog);
@@ -203,9 +224,12 @@ public class StormTcpServer : IAsyncDisposable
                 continue;
             }
 
-            if (_options.Socket.NoDelay)
+            if (clientSocket.AddressFamily != AddressFamily.Unix)
             {
-                clientSocket.NoDelay = true;
+                if (_options.Socket.NoDelay)
+                {
+                    clientSocket.NoDelay = true;
+                }
             }
 
             _options.Socket.ApplyKeepAlive(clientSocket);

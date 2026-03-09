@@ -98,9 +98,12 @@ public class StormTcpClient : IAsyncDisposable
         _disconnectReason = DisconnectReason.None;
         Metrics = new ConnectionMetrics();
 
-        Socket socket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        bool isUnix = _options.EndPoint.AddressFamily == AddressFamily.Unix;
+        Socket socket = isUnix
+            ? new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+            : new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
-        if (_options.Socket.NoDelay)
+        if (!isUnix && _options.Socket.NoDelay)
         {
             socket.NoDelay = true;
         }

@@ -4,7 +4,7 @@
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EndPoint` | `IPEndPoint` | `0.0.0.0:5000` | IP and port to listen on |
+| `EndPoint` | `EndPoint` | `0.0.0.0:5000` | IP/port to listen on, or `UnixDomainSocketEndPoint` for UDS |
 | `Backlog` | `int` | `128` | Maximum pending connection queue |
 | `DualMode` | `bool` | `false` | Accept both IPv4 and IPv6 on a single port |
 | `ReceiveBufferSize` | `int` | `65536` | OS socket receive buffer (bytes) |
@@ -32,7 +32,7 @@
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `EndPoint` | `IPEndPoint` | `127.0.0.1:5000` | Server endpoint to connect to |
+| `EndPoint` | `EndPoint` | `127.0.0.1:5000` | Server endpoint to connect to, or `UnixDomainSocketEndPoint` for UDS |
 | `Ssl` | `ClientSslOptions?` | `null` | SSL/TLS configuration |
 | `Framer` | `IMessageFramer?` | `null` | Message framing strategy |
 | `ConnectTimeout` | `TimeSpan` | `10s` | Connection timeout |

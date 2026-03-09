@@ -49,7 +49,8 @@ public sealed class SocketTuningOptions
     /// </summary>
     internal void ApplyKeepAlive(System.Net.Sockets.Socket socket)
     {
-        if (!KeepAlive)
+        // KeepAlive is not supported on Unix domain sockets
+        if (!KeepAlive || socket.AddressFamily == System.Net.Sockets.AddressFamily.Unix)
         {
             return;
         }
