@@ -638,6 +638,53 @@ dotnet-counters monitor --counters StormSocket -p <pid>
 
 \* `UpDownCounter` requires net7.0+. On net6.0, use `server.Metrics.ActiveConnections` property instead.
 
+## Unix Domain Socket Transport
+
+Unix domain sockets bypass the TCP/IP stack entirely — faster for local IPC (container-to-container, sidecar proxy, microservice communication on the same host).
+
+Just pass a `UnixDomainSocketEndPoint` instead of `IPEndPoint`. Everything else works the same — events, middleware, metrics, groups, framing.
+
+```csharp
+using System.Net.Sockets;
+
+// Server
+var server = new StormTcpServer(new ServerOptions
+{
+    EndPoint = new UnixDomainSocketEndPoint("/tmp/myapp.sock"),
+});
+
+server.OnDataReceived += async (session, data) =>
+{
+    await session.SendAsync(data); // echo
+};
+
+await server.StartAsync();
+
+// Client
+var client = new StormTcpClient(new ClientOptions
+{
+    EndPoint = new UnixDomainSocketEndPoint("/tmp/myapp.sock"),
+});
+
+client.OnDataReceived += async data => Console.WriteLine($"Got {data.Length} bytes");
+await client.ConnectAsync();
+```
+
+Works with WebSocket servers too:
+
+```csharp
+var ws = new StormWebSocketServer(new ServerOptions
+{
+    EndPoint = new UnixDomainSocketEndPoint("/tmp/myws.sock"),
+    WebSocket = new WebSocketOptions { Heartbeat = new() { PingInterval = TimeSpan.FromSeconds(15) } },
+});
+```
+
+**Notes:**
+- TCP-specific socket options (`NoDelay`, `KeepAlive`) are automatically skipped for Unix sockets
+- Stale `.sock` files from previous runs are automatically cleaned up on `StartAsync`
+- `session.RemoteEndPoint` returns the Unix socket path instead of an IP address
+
 ## Logging
 
 StormSocket supports structured logging via `Microsoft.Extensions.Logging`. Pass an `ILoggerFactory` through options — if omitted, logging is completely disabled with zero overhead.

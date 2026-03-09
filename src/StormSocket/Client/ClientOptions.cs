@@ -10,8 +10,12 @@ namespace StormSocket.Client;
 /// </summary>
 public sealed class ClientOptions
 {
-    /// <summary>The server endpoint to connect to. Default: 127.0.0.1:5000.</summary>
-    public IPEndPoint EndPoint { get; init; } = new(IPAddress.Loopback, 5000);
+    /// <summary>
+    /// The server endpoint to connect to. Accepts <see cref="IPEndPoint"/> for TCP/IP or
+    /// <see cref="System.Net.Sockets.UnixDomainSocketEndPoint"/> for Unix domain sockets.
+    /// Default: 127.0.0.1:5000.
+    /// </summary>
+    public EndPoint EndPoint { get; init; } = new IPEndPoint(IPAddress.Loopback, 5000);
 
     /// <summary>Set to enable SSL/TLS encryption. Null = plain TCP.</summary>
     public ClientSslOptions? Ssl { get; init; }
