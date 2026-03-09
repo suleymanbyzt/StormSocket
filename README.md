@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/suleymanbyzt/StormSocket/actions"><img src="https://img.shields.io/github/actions/workflow/status/suleymanbyzt/StormSocket/ci.yml?branch=master" alt="Build" /></a>
+  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/suleymanbyzt/536cdf59b30363682a17ef0927ed7f45/raw/stormsocket-coverage.json" alt="Coverage" />
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/v/StormSocket.svg" alt="NuGet" /></a>
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/dt/StormSocket.svg" alt="NuGet Downloads" /></a>
   <a href="https://github.com/suleymanbyzt/StormSocket/stargazers"><img src="https://img.shields.io/github/stars/suleymanbyzt/StormSocket" alt="Stars" /></a>

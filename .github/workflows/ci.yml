@@ -82,10 +82,34 @@ jobs:
           LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' ./TestResults/**/coverage.cobertura.xml | head -1)
           PERCENT=$(echo "$LINE_RATE * 100" | bc | cut -d. -f1)
           echo "Coverage: ${PERCENT}%"
+          echo "COVERAGE_PERCENT=$PERCENT" >> $GITHUB_ENV
           if [ "$PERCENT" -lt 70 ]; then
             echo "::error::Coverage ${PERCENT}% is below the 70% threshold"
             exit 1
           fi
+
+      - name: Update coverage badge
+        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/master'
+        run: |
+          if [ "$COVERAGE_PERCENT" -ge 70 ]; then
+            COLOR="brightgreen"
+          elif [ "$COVERAGE_PERCENT" -ge 50 ]; then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+          echo "COVERAGE_COLOR=$COLOR" >> $GITHUB_ENV
+
+      - name: Push coverage badge to gist
+        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/master'
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: 536cdf59b30363682a17ef0927ed7f45
+          filename: stormsocket-coverage.json
+          label: coverage
+          message: ${{ env.COVERAGE_PERCENT }}%
+          color: ${{ env.COVERAGE_COLOR }}
 
       - name: Pack
         run: dotnet pack src/StormSocket/StormSocket.csproj --no-build --configuration Release --output ./nupkg
