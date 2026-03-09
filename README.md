@@ -5,7 +5,7 @@
 <h1 align="center">StormSocket</h1>
 
 <p align="center">
-  <a href="https://github.com/suleymanbyzt/StormSocket/actions"><img src="https://img.shields.io/github/actions/workflow/status/suleymanbyzt/StormSocket/dotnet.yml?branch=master" alt="Build" /></a>
+  <a href="https://github.com/suleymanbyzt/StormSocket/actions"><img src="https://img.shields.io/github/actions/workflow/status/suleymanbyzt/StormSocket/ci.yml?branch=master" alt="Build" /></a>
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/v/StormSocket.svg" alt="NuGet" /></a>
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/dt/StormSocket.svg" alt="NuGet Downloads" /></a>
   <a href="https://github.com/suleymanbyzt/StormSocket/stargazers"><img src="https://img.shields.io/github/stars/suleymanbyzt/StormSocket" alt="Stars" /></a>

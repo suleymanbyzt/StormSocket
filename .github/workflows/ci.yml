@@ -14,6 +14,7 @@ concurrency:
 permissions:
   contents: write
   packages: write
+  pull-requests: write
 
 jobs:
   build-and-test:
@@ -39,8 +40,52 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release -warnaserror
 
-      - name: Test
-        run: dotnet test --no-build --configuration Release
+      - name: Test with coverage
+        run: >
+          dotnet test --no-build --configuration Release
+          --collect:"XPlat Code Coverage"
+          --results-directory ./TestResults
+          --
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Include="[StormSocket]*"
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Exclude="[StormSocket.Tests]*,[StormSocket.Samples*]*,[StormSocket.Benchmark*]*"
+
+      - name: Generate coverage report
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.4.5 || true
+          reportgenerator \
+            -reports:"./TestResults/**/coverage.cobertura.xml" \
+            -targetdir:"./TestResults/Report" \
+            -reporttypes:"MarkdownSummaryGithub;Cobertura"
+
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ./TestResults/Report/
+
+      - name: Add coverage to PR comment
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: ./TestResults/Report/SummaryGithub.md
+
+      - name: Write coverage to job summary
+        if: matrix.os == 'ubuntu-latest'
+        run: cat ./TestResults/Report/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Check coverage threshold
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' ./TestResults/**/coverage.cobertura.xml | head -1)
+          PERCENT=$(echo "$LINE_RATE * 100" | bc | cut -d. -f1)
+          echo "Coverage: ${PERCENT}%"
+          if [ "$PERCENT" -lt 70 ]; then
+            echo "::error::Coverage ${PERCENT}% is below the 70% threshold"
+            exit 1
+          fi
 
       - name: Pack
         run: dotnet pack src/StormSocket/StormSocket.csproj --no-build --configuration Release --output ./nupkg
