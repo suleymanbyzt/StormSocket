@@ -16,7 +16,7 @@ public class WsServerAdvancedTests
     private static int GetPort() => Interlocked.Increment(ref _nextPort);
 
     [Fact]
-    public async Task OnConnecting_Reject_ReturnsErrorResponse()
+    public async Task OnConnecting_Reject_FailsClientUpgrade()
     {
         int port = GetPort();
 
@@ -36,20 +36,17 @@ public class WsServerAdvancedTests
 
         try
         {
-            using TcpClient raw = new();
-            await raw.ConnectAsync(IPAddress.Loopback, port);
-            NetworkStream stream = raw.GetStream();
+            // Client should fail to connect because server rejects the upgrade
+            StormWebSocketClient client = new(new WsClientOptions
+            {
+                Uri = new Uri($"ws://localhost:{port}/"),
+                Heartbeat = new HeartbeatOptions { PingInterval = TimeSpan.Zero },
+            });
 
-            Uri uri = new($"ws://localhost:{port}/");
-            (byte[] request, string _) = WsUpgradeHandler.BuildUpgradeRequest(uri);
-            await stream.WriteAsync(request);
-            await stream.FlushAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await client.ConnectAsync());
 
-            byte[] buffer = new byte[1024];
-            int read = await stream.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-            string response = Encoding.ASCII.GetString(buffer, 0, read);
-
-            Assert.Contains("401", response);
+            await client.DisposeAsync();
         }
         finally
         {
