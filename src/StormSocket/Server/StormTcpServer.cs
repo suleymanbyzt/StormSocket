@@ -43,7 +43,7 @@ public class StormTcpServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a new client connects and handshake (SSL if configured) completes.
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession session) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnConnected += async (session) =>
@@ -57,7 +57,7 @@ public class StormTcpServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a client disconnects (gracefully or not).
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session, DisconnectReason reason) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession session, DisconnectReason reason) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnDisconnected += async (session, reason) =>
@@ -72,7 +72,7 @@ public class StormTcpServer : IAsyncDisposable
     /// <summary>
     /// Fired when data (or a framed message) is received from a client.
     /// If a <see cref="ServerOptions.Framer"/> is configured, each invocation contains one complete message.
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session, ReadOnlyMemory&lt;byte&gt; data) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession session, ReadOnlyMemory&lt;byte&gt; data) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnDataReceived += async (session, data) =>
@@ -88,7 +88,7 @@ public class StormTcpServer : IAsyncDisposable
     /// <summary>
     /// Fired when an error occurs during connection handling.
     /// Session may be null if the error occurs before session creation.
-    /// <para><b>Signature:</b> <c>async (IConnectionSession? session, Exception ex) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession? session, Exception ex) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnError += async (session, ex) =>

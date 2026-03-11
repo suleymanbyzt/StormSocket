@@ -51,7 +51,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a WebSocket client completes the upgrade handshake.
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (IWebSocketSession session) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnConnected += async (session) =>
@@ -65,7 +65,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
     /// <summary>
     /// Fired when a WebSocket client disconnects (gracefully or not).
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session, DisconnectReason reason) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (IWebSocketSession session, DisconnectReason reason) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnDisconnected += async (session, reason) =>
@@ -80,7 +80,7 @@ public class StormWebSocketServer : IAsyncDisposable
     /// <summary>
     /// Fired when a complete text or binary WebSocket message is received.
     /// Use <see cref="WsMessage.IsText"/> to check the frame type and <see cref="WsMessage.Text"/> for decoded string content.
-    /// <para><b>Signature:</b> <c>async (IConnectionSession session, WsMessage msg) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (IWebSocketSession session, WsMessage msg) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnMessageReceived += async (session, msg) =>
@@ -98,7 +98,7 @@ public class StormWebSocketServer : IAsyncDisposable
     /// <summary>
     /// Fired when an error occurs during connection handling.
     /// Session may be null if the error occurs before session creation (e.g. during handshake).
-    /// <para><b>Signature:</b> <c>async (IConnectionSession? session, Exception ex) => { }</c></para>
+    /// <para><b>Signature:</b> <c>async (ISession? session, Exception ex) => { }</c></para>
     /// <example>
     /// <code>
     /// server.OnError += async (session, ex) =>
@@ -227,7 +227,7 @@ public class StormWebSocketServer : IAsyncDisposable
         }
 
         // Send GoingAway close to all connected sessions
-        foreach (INetworkSession s in Sessions.All)
+        foreach (ISession s in Sessions.All)
         {
             if (s is WebSocketSession ws && ws.State == ConnectionState.Connected)
             {
@@ -696,7 +696,7 @@ public class StormWebSocketServer : IAsyncDisposable
         {
             ReadOnlyMemory<byte> data = rented.AsMemory(0, written);
             List<ValueTask> tasks = [];
-            foreach (INetworkSession s in Sessions.All)
+            foreach (ISession s in Sessions.All)
             {
                 if (s.Id == excludeId)
                 {

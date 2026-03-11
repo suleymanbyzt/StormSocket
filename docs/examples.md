@@ -14,14 +14,16 @@ var server = new StormTcpServer(new ServerOptions
     Socket = new SocketTuningOptions { NoDelay = true },
 });
 
-server.OnConnected += async session =>
+server.OnConnected += session =>
 {
     Console.WriteLine($"[{session.Id}] Connected ({server.Sessions.Count} online)");
+    return ValueTask.CompletedTask;
 };
 
-server.OnDisconnected += async (session, reason) =>
+server.OnDisconnected += (session, reason) =>
 {
     Console.WriteLine($"[{session.Id}] Disconnected ({reason})");
+    return ValueTask.CompletedTask;
 };
 
 server.OnDataReceived += async (session, data) =>
@@ -30,9 +32,10 @@ server.OnDataReceived += async (session, data) =>
     await session.SendAsync(data);
 };
 
-server.OnError += async (session, ex) =>
+server.OnError += (session, ex) =>
 {
     Console.WriteLine($"[{session?.Id}] Error: {ex.Message}");
+    return ValueTask.CompletedTask;
 };
 
 await server.StartAsync();
@@ -42,6 +45,99 @@ await server.DisposeAsync();
 ```
 
 Test with: `telnet localhost 5000`
+
+## TCP Broadcast Server (Groups + Framing)
+
+A real-world pattern: length-prefix framing, named groups for pub/sub, and graceful lifecycle.
+
+```csharp
+using System.Net;
+using System.Text;
+using StormSocket.Core;
+using StormSocket.Server;
+using StormSocket.Session;
+using StormSocket.Framing;
+
+var server = new StormTcpServer(new ServerOptions
+{
+    EndPoint = new IPEndPoint(IPAddress.Any, 5000),
+    Framer = new LengthPrefixFramer(), // OnDataReceived gets complete messages
+    Socket = new SocketTuningOptions { NoDelay = true },
+});
+
+server.OnConnected += session =>
+{
+    // Every new client joins a default channel
+    server.Groups.Add("all", session);
+    Console.WriteLine($"#{session.Id} connected from {session.RemoteEndPoint}");
+    return ValueTask.CompletedTask;
+};
+
+server.OnDataReceived += async (session, data) =>
+{
+    string text = Encoding.UTF8.GetString(data.Span);
+
+    if (text.StartsWith("/join "))
+    {
+        string room = text[6..].Trim();
+        server.Groups.Add(room, session);
+        await session.SendAsync(Encoding.UTF8.GetBytes($"Joined {room}"));
+    }
+    else if (text.StartsWith("/broadcast "))
+    {
+        string msg = text[11..];
+        byte[] payload = Encoding.UTF8.GetBytes($"#{session.Id}: {msg}");
+        await server.Groups.BroadcastAsync("all", payload, excludeId: session.Id);
+    }
+    else
+    {
+        await session.SendAsync(data); // echo
+    }
+};
+
+server.OnDisconnected += (session, reason) =>
+{
+    server.Groups.RemoveFromAll(session);
+    Console.WriteLine($"#{session.Id} disconnected ({reason})");
+    return ValueTask.CompletedTask;
+};
+
+await server.StartAsync();
+Console.WriteLine("TCP Broadcast server on :5000. Press Enter to stop.");
+Console.ReadLine();
+await server.StopAsync();
+await server.DisposeAsync();
+```
+
+### ASP.NET Core IHostedService Integration
+
+```csharp
+public class StormSocketService : IHostedService, IAsyncDisposable
+{
+    private readonly StormWebSocketServer _server;
+
+    public StormSocketService()
+    {
+        _server = new StormWebSocketServer(new ServerOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Any, 8080),
+        });
+
+        _server.OnMessageReceived += async (session, msg) =>
+        {
+            await session.SendTextAsync($"Echo: {msg.Text}");
+        };
+    }
+
+    public Task StartAsync(CancellationToken ct) => _server.StartAsync(ct).AsTask();
+    public Task StopAsync(CancellationToken ct) => _server.StopAsync(ct).AsTask();
+    public ValueTask DisposeAsync() => _server.DisposeAsync();
+}
+
+// Program.cs
+builder.Services.AddSingleton<StormSocketService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<StormSocketService>());
+```
 
 ## WebSocket Chat Server
 
@@ -64,11 +160,13 @@ var ws = new StormWebSocketServer(new ServerOptions
     },
 });
 
-ws.OnConnected += async session =>
+ws.OnConnected += session =>
 {
     Console.WriteLine($"[{session.Id}] WebSocket connected");
+    return ValueTask.CompletedTask;
 };
 
+// session is IWebSocketSession — SendTextAsync available directly
 ws.OnMessageReceived += async (session, msg) =>
 {
     if (msg.IsText)

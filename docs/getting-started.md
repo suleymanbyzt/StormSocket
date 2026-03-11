@@ -14,6 +14,20 @@ Or via the Package Manager Console:
 Install-Package StormSocket
 ```
 
+## Common Usings
+
+Most projects need these namespaces:
+
+```csharp
+using StormSocket.Server;   // StormTcpServer, StormWebSocketServer, ServerOptions
+using StormSocket.Client;   // StormTcpClient, StormWebSocketClient
+using StormSocket.Session;  // ISession, IWebSocketSession, SessionKey<T>
+using StormSocket.Core;     // DisconnectReason, SlowConsumerPolicy, ConnectionMetrics
+using StormSocket.Framing;  // LengthPrefixFramer, DelimiterFramer
+```
+
+> **Tip:** For simple server-only usage, `using StormSocket.Server;` is often enough — `ServerOptions`, `WebSocketOptions` etc. are all in that namespace.
+
 ## Your First TCP Server
 
 Create a simple TCP echo server that sends back everything it receives:
@@ -28,14 +42,16 @@ StormTcpServer server = new StormTcpServer(new ServerOptions
     Socket = new StormSocket.Core.SocketTuningOptions { NoDelay = true },
 });
 
-server.OnConnected += async session =>
+server.OnConnected += session =>
 {
     Console.WriteLine($"[{session.Id}] Connected ({server.Sessions.Count} online)");
+    return ValueTask.CompletedTask;
 };
 
-server.OnDisconnected += async session =>
+server.OnDisconnected += (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] Disconnected");
+    Console.WriteLine($"[{session.Id}] Disconnected ({reason})");
+    return ValueTask.CompletedTask;
 };
 
 server.OnDataReceived += async (session, data) =>
@@ -44,9 +60,10 @@ server.OnDataReceived += async (session, data) =>
     await session.SendAsync(data);
 };
 
-server.OnError += async (session, ex) =>
+server.OnError += (session, ex) =>
 {
     Console.WriteLine($"[{session?.Id}] Error: {ex.Message}");
+    return ValueTask.CompletedTask;
 };
 
 await server.StartAsync();
@@ -55,6 +72,8 @@ Console.ReadLine();
 ```
 
 Test it with a TCP client (e.g. `telnet localhost 5000` or `ncat localhost 5000`).
+
+> **Note:** Event handlers return `ValueTask`. Use `async` when you need `await`, otherwise return `ValueTask.CompletedTask` directly to avoid async state machine overhead.
 
 ## Your First WebSocket Server
 
@@ -76,18 +95,19 @@ StormWebSocketServer ws = new StormWebSocketServer(new ServerOptions
     }
 });
 
-ws.OnConnected += async session =>
+ws.OnConnected += session =>
 {
     Console.WriteLine($"[{session.Id}] WebSocket connected ({ws.Sessions.Count} online)");
-    await ValueTask.CompletedTask;
+    return ValueTask.CompletedTask;
 };
 
-ws.OnDisconnected += async session =>
+ws.OnDisconnected += (session, reason) =>
 {
-    Console.WriteLine($"[{session.Id}] WebSocket disconnected ({ws.Sessions.Count} online)");
-    await ValueTask.CompletedTask;
+    Console.WriteLine($"[{session.Id}] WebSocket disconnected ({reason})");
+    return ValueTask.CompletedTask;
 };
 
+// session is IWebSocketSession — SendTextAsync available directly
 ws.OnMessageReceived += async (session, msg) =>
 {
     if (msg.IsText)
@@ -97,10 +117,10 @@ ws.OnMessageReceived += async (session, msg) =>
     }
 };
 
-ws.OnError += async (session, ex) =>
+ws.OnError += (session, ex) =>
 {
     Console.WriteLine($"[{session?.Id}] Error: {ex.Message}");
-    await ValueTask.CompletedTask;
+    return ValueTask.CompletedTask;
 };
 
 await ws.StartAsync();

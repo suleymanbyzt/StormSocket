@@ -52,12 +52,12 @@ Every connection gets an `ISession` with a unique auto-incrementing ID.
 int online = server.Sessions.Count;
 
 // Find a session by ID
-if (server.Sessions.TryGet(42, out INetworkSession? session) && session is ISession s)
+if (server.Sessions.TryGet(42, out ISession? session) && session is not null)
 {
-    Console.WriteLine($"Session #{s.Id}, uptime: {s.Metrics.Uptime}");
-    Console.WriteLine($"Bytes sent: {s.Metrics.BytesSent}");
-    Console.WriteLine($"Bytes received: {s.Metrics.BytesReceived}");
-    Console.WriteLine($"Groups: {string.Join(", ", s.Groups)}");
+    Console.WriteLine($"Session #{session.Id}, uptime: {session.Metrics.Uptime}");
+    Console.WriteLine($"Bytes sent: {session.Metrics.BytesSent}");
+    Console.WriteLine($"Bytes received: {session.Metrics.BytesReceived}");
+    Console.WriteLine($"Groups: {string.Join(", ", session.Groups)}");
 }
 
 // Broadcast to all
@@ -70,10 +70,9 @@ await server.BroadcastAsync(data, excludeId: senderId);
 await session.CloseAsync();
 
 // Iterate all sessions
-foreach (INetworkSession ns in server.Sessions.All)
+foreach (ISession s in server.Sessions.All)
 {
-    if (ns is ISession s)
-        Console.WriteLine($"#{s.Id} - {s.State} - up {s.Metrics.Uptime:hh\\:mm\\:ss}");
+    Console.WriteLine($"#{s.Id} - {s.State} - up {s.Metrics.Uptime:hh\\:mm\\:ss}");
 }
 ```
 
@@ -118,23 +117,20 @@ Both approaches share the same underlying store — use whichever fits. The dict
 
 ### WebSocket-specific methods
 
-Cast to `WebSocketSession` for text frame support:
+WebSocket event handlers receive `IWebSocketSession` directly — no casting needed:
 
 ```csharp
 ws.OnMessageReceived += async (session, msg) =>
 {
-    if (session is WebSocketSession wss)
-    {
-        // Send text frame (UTF-8)
-        await wss.SendTextAsync("Hello!");
+    // session is IWebSocketSession — SendTextAsync is available directly
+    await session.SendTextAsync("Hello!");
 
-        // Send pre-encoded UTF-8 bytes (zero-copy)
-        byte[] utf8 = Encoding.UTF8.GetBytes("Hello!");
-        await wss.SendTextAsync(utf8);
+    // Send pre-encoded UTF-8 bytes (zero-copy)
+    byte[] utf8 = Encoding.UTF8.GetBytes("Hello!");
+    await session.SendTextAsync(utf8);
 
-        // Send binary frame
-        await wss.SendAsync(binaryData);
-    }
+    // Send binary frame
+    await session.SendAsync(binaryData);
 };
 ```
 

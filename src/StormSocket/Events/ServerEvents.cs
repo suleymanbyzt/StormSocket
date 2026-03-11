@@ -17,13 +17,13 @@ public delegate ValueTask DataReceivedHandler(ISession session, ReadOnlyMemory<b
 public delegate ValueTask ErrorHandler(ISession? session, Exception exception);
 
 /// <summary>Fired when a complete WebSocket message (text or binary) is received.</summary>
-public delegate ValueTask WsMessageReceivedHandler(ISession session, WsMessage message);
+public delegate ValueTask WsMessageReceivedHandler(IWebSocketSession session, WsMessage message);
 
 /// <summary>Fired when a WebSocket client completes the upgrade handshake.</summary>
-public delegate ValueTask WsConnectedHandler(ISession session);
+public delegate ValueTask WsConnectedHandler(IWebSocketSession session);
 
 /// <summary>Fired when a WebSocket client disconnects.</summary>
-public delegate ValueTask WsDisconnectedHandler(ISession session, DisconnectReason reason);
+public delegate ValueTask WsDisconnectedHandler(IWebSocketSession session, DisconnectReason reason);
 
 /// <summary>
 /// Fired before accepting a WebSocket upgrade request.

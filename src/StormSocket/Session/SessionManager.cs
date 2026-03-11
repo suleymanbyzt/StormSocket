@@ -7,26 +7,26 @@ namespace StormSocket.Session;
 /// </summary>
 public sealed class SessionManager
 {
-    private readonly ConcurrentDictionary<long, INetworkSession> _networkSessions = new();
+    private readonly ConcurrentDictionary<long, ISession> _networkSessions = new();
 
     /// <summary>Number of currently connected sessions.</summary>
     public int Count => _networkSessions.Count;
 
     /// <summary>Enumerates all active sessions (snapshot-safe).</summary>
-    public IEnumerable<INetworkSession> All => _networkSessions.Values;
+    public IEnumerable<ISession> All => _networkSessions.Values;
 
-    public bool TryAdd(INetworkSession networkSession) => _networkSessions.TryAdd(networkSession.Id, networkSession);
+    public bool TryAdd(ISession networkSession) => _networkSessions.TryAdd(networkSession.Id, networkSession);
 
-    public bool TryRemove(long id, out INetworkSession? networkSession)
+    public bool TryRemove(long id, out ISession? networkSession)
     {
-        bool result = _networkSessions.TryRemove(id, out INetworkSession? s);
+        bool result = _networkSessions.TryRemove(id, out ISession? s);
         networkSession = s;
         return result;
     }
 
-    public bool TryGet(long id, out INetworkSession? networkSession)
+    public bool TryGet(long id, out ISession? networkSession)
     {
-        bool result = _networkSessions.TryGetValue(id, out INetworkSession? s);
+        bool result = _networkSessions.TryGetValue(id, out ISession? s);
         networkSession = s;
         return result;
     }
@@ -39,7 +39,7 @@ public sealed class SessionManager
     public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, long? excludeId = null, CancellationToken cancellationToken = default)
     {
         List<ValueTask> tasks = [];
-        foreach (INetworkSession networkSession in _networkSessions.Values)
+        foreach (ISession networkSession in _networkSessions.Values)
         {
             if (networkSession.Id == excludeId)
             {
@@ -66,12 +66,9 @@ public sealed class SessionManager
     public async ValueTask CloseAllAsync(CancellationToken cancellationToken = default)
     {
         List<ValueTask> tasks = [];
-        foreach (INetworkSession networkSession in _networkSessions.Values)
+        foreach (ISession session in _networkSessions.Values)
         {
-            if (networkSession is ISession connSession)
-            {
-                tasks.Add(connSession.CloseAsync(cancellationToken));
-            }
+            tasks.Add(session.CloseAsync(cancellationToken));
         }
 
         foreach (ValueTask task in tasks)

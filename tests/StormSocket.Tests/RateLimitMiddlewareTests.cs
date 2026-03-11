@@ -101,7 +101,7 @@ public class RateLimitMiddlewareTests
     public async Task OnExceededEventFires()
     {
         bool eventFired = false;
-        INetworkSession? networkSessions = null;
+        ISession? networkSessions = null;
 
         RateLimitMiddleware middleware = new(new RateLimitOptions
         {

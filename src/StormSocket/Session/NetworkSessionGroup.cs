@@ -8,20 +8,20 @@ namespace StormSocket.Session;
 /// </summary>
 public sealed class NetworkSessionGroup
 {
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<long, INetworkSession>> _groups = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<long, ISession>> _groups = new();
 
     /// <summary>Adds a session to a named group. Creates the group if it doesn't exist.</summary>
-    public void Add(string group, INetworkSession networkSession)
+    public void Add(string group, ISession networkSession)
     {
-        ConcurrentDictionary<long, INetworkSession> members = _groups.GetOrAdd(group, _ => new ConcurrentDictionary<long, INetworkSession>());
+        ConcurrentDictionary<long, ISession> members = _groups.GetOrAdd(group, _ => new ConcurrentDictionary<long, ISession>());
         members.TryAdd(networkSession.Id, networkSession);
         networkSession.JoinGroup(group);
     }
 
     /// <summary>Removes a session from a group. Deletes the group if it becomes empty.</summary>
-    public void Remove(string group, INetworkSession networkSession)
+    public void Remove(string group, ISession networkSession)
     {
-        if (_groups.TryGetValue(group, out ConcurrentDictionary<long, INetworkSession>? members))
+        if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
         {
             members.TryRemove(networkSession.Id, out _);
             networkSession.LeaveGroup(group);
@@ -34,11 +34,11 @@ public sealed class NetworkSessionGroup
     }
 
     /// <summary>Removes a session from all groups it belongs to (called on disconnect).</summary>
-    public void RemoveFromAll(INetworkSession networkSession)
+    public void RemoveFromAll(ISession networkSession)
     {
         foreach (string group in networkSession.Groups)
         {
-            if (_groups.TryGetValue(group, out ConcurrentDictionary<long, INetworkSession>? members))
+            if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
             {
                 members.TryRemove(networkSession.Id, out _);
                 if (members.IsEmpty)
@@ -52,12 +52,12 @@ public sealed class NetworkSessionGroup
     /// <summary>Sends data to all members of a group. Best-effort: individual failures are silently ignored.</summary>
     public async ValueTask BroadcastAsync(string group, ReadOnlyMemory<byte> data, long? excludeId = null, CancellationToken cancellationToken = default)
     {
-        if (!_groups.TryGetValue(group, out ConcurrentDictionary<long, INetworkSession>? members))
+        if (!_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
         {
             return;
         }
 
-        foreach (INetworkSession session in members.Values)
+        foreach (ISession session in members.Values)
         {
             if (session.Id == excludeId)
             {
@@ -76,7 +76,7 @@ public sealed class NetworkSessionGroup
     }
 
     /// <summary>Returns the number of sessions in a group (0 if the group doesn't exist).</summary>
-    public int MemberCount(string group) => _groups.TryGetValue(group, out ConcurrentDictionary<long, INetworkSession>? members) ? members.Count : 0;
+    public int MemberCount(string group) => _groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members) ? members.Count : 0;
 
     /// <summary>Enumerates all existing group names.</summary>
     public IEnumerable<string> GroupNames => _groups.Keys;

@@ -51,5 +51,5 @@ await server.StartAsync();
 - [Features Guide](features.md) — sessions, groups, framing, heartbeat, slow consumer, rate limiting, fragmentation, disconnect reasons
 - [Middleware](middleware.md) — pipeline, rate limiting, custom middleware
 - [Configuration](configuration.md) — all options tables (ServerOptions, WebSocketOptions, ClientOptions, etc.)
-- [API Reference](api-reference.md) — INetworkSession, ISession, WebSocketSession, clients, middleware, framers
+- [API Reference](api-reference.md) — ISession, IWebSocketSession, clients, middleware, framers
 - [Architecture](architecture.md) — connection lifecycle, write serialization, backpressure internals

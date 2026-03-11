@@ -7,7 +7,7 @@ namespace StormSocket.Tests;
 
 public class NetworkSessionGroupTests
 {
-    private sealed class FakeSession : INetworkSession
+    private sealed class FakeSession : ISession
     {
         private readonly HashSet<string> _groups = [];
         public long Id { get; }
@@ -194,7 +194,7 @@ public class NetworkSessionGroupTests
         Assert.Single(good.Sent);
     }
 
-    private sealed class FailingSession : INetworkSession
+    private sealed class FailingSession : ISession
     {
         private readonly HashSet<string> _groups = [];
         public long Id { get; }

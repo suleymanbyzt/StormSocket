@@ -72,7 +72,7 @@ public class SessionManagerTests
 
         Assert.True(mgr.TryAdd(networkSession));
         Assert.Equal(1, mgr.Count);
-        Assert.True(mgr.TryGet(1, out INetworkSession? found));
+        Assert.True(mgr.TryGet(1, out ISession? found));
         Assert.Same(networkSession, found);
     }
 
@@ -83,7 +83,7 @@ public class SessionManagerTests
         FakeNetworkSession networkSession = new FakeNetworkSession { Id = 1 };
         mgr.TryAdd(networkSession);
 
-        Assert.True(mgr.TryRemove(1, out INetworkSession? removed));
+        Assert.True(mgr.TryRemove(1, out ISession? removed));
         Assert.Same(networkSession, removed);
         Assert.Equal(0, mgr.Count);
     }

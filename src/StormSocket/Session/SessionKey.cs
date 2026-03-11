@@ -2,7 +2,7 @@ namespace StormSocket.Session;
 
 /// <summary>
 /// A strongly-typed key for storing and retrieving session data via
-/// <see cref="INetworkSession.Get{T}"/> and <see cref="INetworkSession.Set{T}"/>.
+/// <see cref="ISession.Get{T}"/> and <see cref="ISession.Set{T}"/>.
 /// <example>
 /// <code>
 /// static readonly SessionKey&lt;string&gt; UserId = new("userId");

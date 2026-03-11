@@ -14,7 +14,7 @@ namespace StormSocket.Session;
 /// All write operations are serialized via an internal lock to prevent
 /// concurrent PipeWriter access (heartbeat pings, auto-pong, user sends).
 /// </summary>
-public sealed class WebSocketSession : ISession
+public sealed class WebSocketSession : IWebSocketSession
 {
     private readonly ITransport _transport;
     private readonly SlowConsumerPolicy _policy;
