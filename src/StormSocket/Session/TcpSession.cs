@@ -12,6 +12,7 @@ public sealed class TcpSession : ISession
     private readonly ServerMetrics? _serverMetrics;
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
+    private NetworkSessionGroup? _groupManager;
     private volatile ConnectionState _state;
     private int _disconnectReason;
     private int _closeGuard;
@@ -65,6 +66,19 @@ public sealed class TcpSession : ISession
                 _ = CloseAsync();
             };
         }
+    }
+
+    internal void ClearGroups()
+    {
+        lock (_groupLock)
+        {
+            _groups.Clear();
+        }
+    }
+
+    internal void SetGroupManager(NetworkSessionGroup groupManager)
+    {
+        _groupManager = groupManager;
     }
 
     internal void SetIdleTimer(IdleTimer idleTimer)
@@ -148,17 +162,29 @@ public sealed class TcpSession : ISession
 
     public void JoinGroup(string group)
     {
+        bool added;
         lock (_groupLock)
         {
-            _groups.Add(group);
+            added = _groups.Add(group);
+        }
+
+        if (added)
+        {
+            _groupManager?.RegisterSession(group, this);
         }
     }
 
     public void LeaveGroup(string group)
     {
+        bool removed;
         lock (_groupLock)
         {
-            _groups.Remove(group);
+            removed = _groups.Remove(group);
+        }
+
+        if (removed)
+        {
+            _groupManager?.UnregisterSession(group, this);
         }
     }
 

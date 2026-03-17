@@ -22,6 +22,7 @@ public sealed class WebSocketSession : IWebSocketSession
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly object _groupLock = new();
     private readonly HashSet<string> _groups = [];
+    private NetworkSessionGroup? _groupManager;
     private volatile ConnectionState _state;
     private volatile bool _isBackpressured;
     private int _disconnectReason;
@@ -67,6 +68,19 @@ public sealed class WebSocketSession : IWebSocketSession
         _policy = policy;
         _serverMetrics = serverMetrics;
         _state = ConnectionState.Connected;
+    }
+
+    internal void ClearGroups()
+    {
+        lock (_groupLock)
+        {
+            _groups.Clear();
+        }
+    }
+
+    internal void SetGroupManager(NetworkSessionGroup groupManager)
+    {
+        _groupManager = groupManager;
     }
 
     internal void SetHeartbeat(WsHeartbeat heartbeat)
@@ -372,17 +386,29 @@ public sealed class WebSocketSession : IWebSocketSession
 
     public void JoinGroup(string group)
     {
+        bool added;
         lock (_groupLock)
         {
-            _groups.Add(group);
+            added = _groups.Add(group);
+        }
+
+        if (added)
+        {
+            _groupManager?.RegisterSession(group, this);
         }
     }
 
     public void LeaveGroup(string group)
     {
+        bool removed;
         lock (_groupLock)
         {
-            _groups.Remove(group);
+            removed = _groups.Remove(group);
+        }
+
+        if (removed)
+        {
+            _groupManager?.UnregisterSession(group, this);
         }
     }
 

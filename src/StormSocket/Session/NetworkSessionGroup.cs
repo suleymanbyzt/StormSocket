@@ -11,40 +11,61 @@ public sealed class NetworkSessionGroup
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<long, ISession>> _groups = new();
 
     /// <summary>Adds a session to a named group. Creates the group if it doesn't exist.</summary>
-    public void Add(string group, ISession networkSession)
+    public void Add(string group, ISession session)
     {
-        ConcurrentDictionary<long, ISession> members = _groups.GetOrAdd(group, _ => new ConcurrentDictionary<long, ISession>());
-        members.TryAdd(networkSession.Id, networkSession);
-        networkSession.JoinGroup(group);
+        RegisterSession(group, session);
+        session.JoinGroup(group);
     }
 
     /// <summary>Removes a session from a group. Deletes the group if it becomes empty.</summary>
-    public void Remove(string group, ISession networkSession)
+    public void Remove(string group, ISession session)
     {
-        if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
-        {
-            members.TryRemove(networkSession.Id, out _);
-            networkSession.LeaveGroup(group);
-
-            if (members.IsEmpty)
-            {
-                _groups.TryRemove(group, out _);
-            }
-        }
+        UnregisterSession(group, session);
+        session.LeaveGroup(group);
     }
 
     /// <summary>Removes a session from all groups it belongs to (called on disconnect).</summary>
-    public void RemoveFromAll(ISession networkSession)
+    public void RemoveFromAll(ISession session)
     {
-        foreach (string group in networkSession.Groups)
+        // Snapshot group list to avoid modification during iteration
+        foreach (string group in session.Groups)
         {
-            if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
+            UnregisterSession(group, session);
+        }
+
+        // Clear the session's local set
+        if (session is TcpSession tcp)
+        {
+            tcp.ClearGroups();
+        }
+        else if (session is WebSocketSession ws)
+        {
+            ws.ClearGroups();
+        }
+    }
+
+    /// <summary>
+    /// Adds a session to the central dictionary only. Called by session.JoinGroup().
+    /// Does not call back to session to avoid circular calls.
+    /// </summary>
+    internal void RegisterSession(string group, ISession session)
+    {
+        ConcurrentDictionary<long, ISession> members = _groups.GetOrAdd(group, _ => new ConcurrentDictionary<long, ISession>());
+        members.TryAdd(session.Id, session);
+    }
+
+    /// <summary>
+    /// Removes a session from the central dictionary only. Called by session.LeaveGroup().
+    /// Does not call back to session to avoid circular calls.
+    /// </summary>
+    internal void UnregisterSession(string group, ISession session)
+    {
+        if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
+        {
+            members.TryRemove(session.Id, out _);
+            if (members.IsEmpty)
             {
-                members.TryRemove(networkSession.Id, out _);
-                if (members.IsEmpty)
-                {
-                    _groups.TryRemove(group, out _);
-                }
+                _groups.TryRemove(group, out _);
             }
         }
     }

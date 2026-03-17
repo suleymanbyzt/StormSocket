@@ -310,6 +310,7 @@ public class StormTcpServer : IAsyncDisposable
                 });
 
             session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
+            session.SetGroupManager(Groups);
             Sessions.TryAdd(session);
             Metrics.RecordConnectionOpened();
             _logger.LogDebug("Session {SessionId} connected from {RemoteEndPoint}", id, socket.RemoteEndPoint);

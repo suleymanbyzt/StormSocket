@@ -326,6 +326,7 @@ public class StormWebSocketServer : IAsyncDisposable
             }
 
             session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
+            session.SetGroupManager(Groups);
             if (deflate is not null)
             {
                 session.SetCompression(deflate);

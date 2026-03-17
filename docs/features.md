@@ -139,9 +139,12 @@ ws.OnMessageReceived += async (session, msg) =>
 Built-in named groups for chat rooms, game lobbies, pub/sub channels, etc.
 
 ```csharp
-// Add session to a group
+// Join a group — works directly on the session
+session.JoinGroup("room:general");
+session.JoinGroup("room:vip");
+
+// Or via the server's group manager (equivalent)
 server.Groups.Add("room:general", session);
-server.Groups.Add("room:vip", session);
 
 // Broadcast to a group
 await server.Groups.BroadcastAsync("room:general", data);
@@ -149,8 +152,8 @@ await server.Groups.BroadcastAsync("room:general", data);
 // Broadcast excluding sender
 await server.Groups.BroadcastAsync("room:general", data, excludeId: session.Id);
 
-// Remove from group
-server.Groups.Remove("room:vip", session);
+// Leave a group
+session.LeaveGroup("room:vip");
 
 // Check member count
 int count = server.Groups.MemberCount("room:general");
