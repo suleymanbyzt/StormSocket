@@ -413,24 +413,44 @@ public static class WsUpgradeHandler
     }
 
     public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey, out string? extensions, out string? subprotocol)
+        => ParseUpgradeResponse(ref buffer, expectedWsKey, out extensions, out subprotocol, out _) == WsUpgradeResponseState.Accepted;
+
+    /// <summary>
+    /// Parses the server's handshake response, distinguishing "not all of it has arrived yet" from
+    /// "it arrived and the server said no".
+    /// </summary>
+    /// <remarks>
+    /// A plain bool cannot tell those apart, which leaves a client waiting for more bytes that will
+    /// never come after a rejection — until its connect timeout fires, turning a clear 401 into a
+    /// timeout several seconds later.
+    /// </remarks>
+    /// <param name="statusLine">The response's status line, available whenever the headers were complete.</param>
+    internal static WsUpgradeResponseState ParseUpgradeResponse(
+        ref ReadOnlySequence<byte> buffer,
+        string expectedWsKey,
+        out string? extensions,
+        out string? subprotocol,
+        out string? statusLine)
     {
         extensions = null;
         subprotocol = null;
+        statusLine = null;
 
         SequenceReader<byte> reader = new SequenceReader<byte>(buffer);
         if (!reader.TryReadTo(out ReadOnlySequence<byte> beforeTerminator, CrLfCrLf))
         {
-            return false;
+            return WsUpgradeResponseState.Incomplete;
         }
 
         string headerStr = DecodeAscii(beforeTerminator);
         buffer = buffer.Slice(reader.Position);
 
         string[] lines = headerStr.Split("\r\n");
+        statusLine = lines.Length > 0 ? lines[0] : null;
 
         if (lines.Length is 0 || !lines[0].StartsWith("HTTP/1.1 101", StringComparison.Ordinal))
         {
-            return false;
+            return WsUpgradeResponseState.Rejected;
         }
 
         string expectedAccept = ComputeAcceptKey(expectedWsKey);
@@ -452,7 +472,7 @@ public static class WsUpgradeHandler
             }
         }
 
-        return acceptValid;
+        return acceptValid ? WsUpgradeResponseState.Accepted : WsUpgradeResponseState.InvalidAcceptKey;
     }
 
     private static string DecodeAscii(in ReadOnlySequence<byte> sequence)

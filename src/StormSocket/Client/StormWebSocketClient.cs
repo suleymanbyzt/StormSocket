@@ -351,10 +351,23 @@ public class StormWebSocketClient : IAsyncDisposable
             ReadResult result = await reader.ReadAsync(ct).ConfigureAwait(false);
             ReadOnlySequence<byte> buffer = result.Buffer;
 
-            if (WsUpgradeHandler.TryParseUpgradeResponse(ref buffer, wsKey, out string? extensions, out string? subprotocol))
+            WsUpgradeResponseState state = WsUpgradeHandler.ParseUpgradeResponse(
+                ref buffer, wsKey, out string? extensions, out string? subprotocol, out string? statusLine);
+
+            if (state == WsUpgradeResponseState.Accepted)
             {
                 reader.AdvanceTo(buffer.Start, buffer.End);
                 return (true, extensions, subprotocol);
+            }
+
+            // A refusal is final: waiting for more bytes after it would turn a clear rejection into
+            // a connect timeout seconds later.
+            if (state is WsUpgradeResponseState.Rejected or WsUpgradeResponseState.InvalidAcceptKey)
+            {
+                reader.AdvanceTo(buffer.Start, buffer.End);
+                throw new InvalidOperationException(state == WsUpgradeResponseState.Rejected
+                    ? $"WebSocket upgrade rejected by the server: {statusLine}"
+                    : "WebSocket upgrade response carried an invalid Sec-WebSocket-Accept value.");
             }
 
             long buffered = buffer.Length;

@@ -223,6 +223,15 @@ public sealed class SslTransport : ITransport
             return;
         }
 
+        await CloseCoreAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shuts the connection down. Called by <see cref="CloseAsync"/> and by the dispose path, which
+    /// has already marked the transport disposed and must not be turned away by that guard.
+    /// </summary>
+    private async ValueTask CloseCoreAsync(CancellationToken cancellationToken)
+    {
         await _sendPipe.Writer.CompleteAsync().ConfigureAwait(false);
 
         // Completing the writer makes the send loop flush what is still queued and then exit by
@@ -283,7 +292,7 @@ public sealed class SslTransport : ITransport
             return;
         }
 
-        await CloseAsync().ConfigureAwait(false);
+        await CloseCoreAsync(CancellationToken.None).ConfigureAwait(false);
 
         // A Pipe only returns its rented segments once both ends are completed, and the receive
         // loop only ever completes the writer. Consumers are done by the time the transport is
