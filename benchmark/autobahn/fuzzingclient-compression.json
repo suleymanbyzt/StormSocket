@@ -1,0 +1,16 @@
+{
+  "outdir": "/reports/servers",
+  "servers": [
+    {
+      "agent": "StormSocket",
+      "url": "ws://host.docker.internal:9001"
+    }
+  ],
+  "cases": [
+    "12.*",
+    "13.*"
+  ],
+  "__comment": "permessage-deflate (RFC 7692). Hundreds of cases with payloads up to 1 MB, so it is slower than the whole correctness suite put together.",
+  "exclude-cases": [],
+  "exclude-agent-cases": {}
+}

@@ -1,0 +1,121 @@
+name: Autobahn
+
+# The Autobahn Testsuite is the reference conformance suite for RFC 6455. It runs in its own workflow
+# because it needs Docker, and it is split in two: the correctness suite finishes in seconds and is
+# the signal worth waiting for, while the compression sections echo hundreds of megabyte-scale
+# payloads and take minutes.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  autobahn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: conformance
+            spec: fuzzingclient.json
+          - name: compression
+            spec: fuzzingclient-compression.json
+
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build echo server
+        run: dotnet build benchmark/autobahn/AutobahnEchoServer -c Release
+
+      - name: Start echo server
+        run: |
+          nohup dotnet run --no-build -c Release --project benchmark/autobahn/AutobahnEchoServer 9001 > /tmp/autobahn-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if nc -z localhost 9001; then echo "server up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::echo server did not start"
+          cat /tmp/autobahn-server.log
+          exit 1
+
+      - name: Run fuzzing client
+        timeout-minutes: 15
+        run: |
+          mkdir -p benchmark/autobahn/reports
+          # The report directory comes from the spec file's "outdir"; wstest has no --outdir option.
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -v "${PWD}/benchmark/autobahn:/config" \
+            -v "${PWD}/benchmark/autobahn/reports:/reports" \
+            crossbario/autobahn-testsuite \
+            wstest --mode fuzzingclient --spec /config/${{ matrix.spec }}
+
+      - name: Take ownership of the report
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" benchmark/autobahn/reports || true
+
+      - name: Summarize results
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib, sys
+
+          index = pathlib.Path("benchmark/autobahn/reports/servers/index.json")
+          if not index.exists():
+              print("::error::no Autobahn report produced")
+              sys.exit(1)
+
+          results = json.loads(index.read_text())["StormSocket"]
+
+          # A case carries two verdicts — what the implementation did with the payload, and how it
+          # closed. Both have to be acceptable: echoing correctly and then closing with the wrong
+          # code is still a protocol violation.
+          #
+          # UNIMPLEMENTED counts as acceptable. Autobahn reports it, separately from FAILED, when an
+          # extension parameter was declined; this server declines permessage-deflate offers that
+          # require a smaller LZ77 window, because DeflateStream cannot honor one and RFC 7692
+          # 7.1.2.2 asks implementations to decline rather than accept and ignore the parameter.
+          acceptable = ("OK", "INFORMATIONAL", "NON-STRICT", "UNIMPLEMENTED")
+
+          failed = {case: f"{r['behavior']} / close: {r.get('behaviorClose', '-')}"
+                    for case, r in results.items()
+                    if r["behavior"] not in acceptable
+                    or r.get("behaviorClose", "OK") not in acceptable}
+
+          unimplemented = sum(1 for r in results.values() if r["behavior"] == "UNIMPLEMENTED")
+
+          print(f"## Autobahn ${{ matrix.name }}: {len(results) - len(failed)}/{len(results)} cases passed")
+          if unimplemented:
+              print(f"\n{unimplemented} case(s) reported UNIMPLEMENTED (declined extension parameters).")
+          if failed:
+              print("\n| Case | Behavior |\n|---|---|")
+              for case, behavior in sorted(failed.items()):
+                  print(f"| {case} | {behavior} |")
+
+          pathlib.Path("failed.txt").write_text("\n".join(sorted(failed)))
+          PY
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-report-${{ matrix.name }}
+          path: benchmark/autobahn/reports/
+
+      - name: Fail on non-conforming cases
+        run: |
+          if [ -s failed.txt ]; then
+            echo "::error::Autobahn reported non-conforming cases:"
+            cat failed.txt
+            exit 1
+          fi

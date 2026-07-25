@@ -27,7 +27,13 @@ public sealed class SslTransport : ITransport
     private readonly CancellationTokenSource _cts = new();
     private Task? _receiveTask;
     private Task? _sendTask;
-    private bool _disposed;
+    private int _disposed;
+
+    /// <summary>Matches SocketTuningOptions.MaxPendingSendBytes / MaxPendingReceiveBytes.</summary>
+    private const long DefaultMaxPendingBytes = 1024 * 1024;
+
+    /// <summary>How long a close waits for queued data to reach the peer before giving up on it.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
 
     public PipeReader Input => _receivePipe.Reader;
     public PipeWriter Output => _sendPipe.Writer;
@@ -35,11 +41,17 @@ public sealed class SslTransport : ITransport
     /// <summary>
     /// Creates a server-mode SSL transport that authenticates as a server using the provided certificate.
     /// </summary>
+    /// <param name="maxPendingReceiveBytes">Bytes received but not yet processed before reads pause. 0 uses the pipe default.</param>
+    /// <param name="maxPendingSendBytes">Bytes waiting to be sent before backpressure kicks in. 0 uses the pipe default.</param>
+    /// <param name="receiveOptions">Overrides <paramref name="maxPendingReceiveBytes"/> when supplied.</param>
+    /// <param name="sendOptions">Overrides <paramref name="maxPendingSendBytes"/> when supplied.</param>
     public SslTransport(
         Socket socket,
         X509Certificate2 certificate,
         SslProtocols protocols = SslProtocols.None,
         bool clientCertificateRequired = false,
+        long maxPendingReceiveBytes = DefaultMaxPendingBytes,
+        long maxPendingSendBytes = DefaultMaxPendingBytes,
         PipeOptions? receiveOptions = null,
         PipeOptions? sendOptions = null)
     {
@@ -48,19 +60,25 @@ public sealed class SslTransport : ITransport
         _protocols = protocols;
         _clientCertificateRequired = clientCertificateRequired;
         _isClientMode = false;
-        _receivePipe = new Pipe(receiveOptions ?? PipeOptions.Default);
-        _sendPipe = new Pipe(sendOptions ?? PipeOptions.Default);
+        _receivePipe = new Pipe(receiveOptions ?? CreatePipeOptions(maxPendingReceiveBytes));
+        _sendPipe = new Pipe(sendOptions ?? CreatePipeOptions(maxPendingSendBytes));
     }
 
     /// <summary>
     /// Creates a client-mode SSL transport that authenticates as a client to the specified host.
     /// </summary>
+    /// <param name="maxPendingReceiveBytes">Bytes received but not yet processed before reads pause. 0 uses the pipe default.</param>
+    /// <param name="maxPendingSendBytes">Bytes waiting to be sent before backpressure kicks in. 0 uses the pipe default.</param>
+    /// <param name="receiveOptions">Overrides <paramref name="maxPendingReceiveBytes"/> when supplied.</param>
+    /// <param name="sendOptions">Overrides <paramref name="maxPendingSendBytes"/> when supplied.</param>
     public SslTransport(
         Socket socket,
         string targetHost,
         SslProtocols protocols = SslProtocols.None,
         RemoteCertificateValidationCallback? remoteCertificateValidation = null,
         X509Certificate2? clientCertificate = null,
+        long maxPendingReceiveBytes = DefaultMaxPendingBytes,
+        long maxPendingSendBytes = DefaultMaxPendingBytes,
         PipeOptions? receiveOptions = null,
         PipeOptions? sendOptions = null)
     {
@@ -70,9 +88,14 @@ public sealed class SslTransport : ITransport
         _isClientMode = true;
         _remoteCertValidator = remoteCertificateValidation;
         _certificate = clientCertificate;
-        _receivePipe = new Pipe(receiveOptions ?? PipeOptions.Default);
-        _sendPipe = new Pipe(sendOptions ?? PipeOptions.Default);
+        _receivePipe = new Pipe(receiveOptions ?? CreatePipeOptions(maxPendingReceiveBytes));
+        _sendPipe = new Pipe(sendOptions ?? CreatePipeOptions(maxPendingSendBytes));
     }
+
+    private static PipeOptions CreatePipeOptions(long maxPendingBytes)
+        => maxPendingBytes > 0
+            ? new PipeOptions(pauseWriterThreshold: maxPendingBytes, resumeWriterThreshold: maxPendingBytes / 2)
+            : PipeOptions.Default;
 
     public async ValueTask HandshakeAsync(CancellationToken cancellationToken = default)
     {
@@ -112,6 +135,7 @@ public sealed class SslTransport : ITransport
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         PipeWriter writer = _receivePipe.Writer;
+        Exception? error = null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -132,12 +156,27 @@ public sealed class SslTransport : ITransport
             }
         }
         catch (OperationCanceledException) { }
-        catch (IOException) { }
+        catch (IOException ex)
+        {
+            // A TLS stream that dies mid-read is a fault the consumer must see; a peer that simply
+            // went away is a clean end of stream, as it is on a plain socket.
+            if (ex.InnerException is SocketException socketEx && !IsExpectedDisconnect(socketEx.SocketErrorCode))
+            {
+                error = ex;
+            }
+        }
         finally
         {
-            await writer.CompleteAsync().ConfigureAwait(false);
+            await writer.CompleteAsync(error).ConfigureAwait(false);
         }
     }
+
+    private static bool IsExpectedDisconnect(SocketError error)
+        => error is SocketError.ConnectionAborted
+            or SocketError.ConnectionRefused
+            or SocketError.ConnectionReset
+            or SocketError.OperationAborted
+            or SocketError.Shutdown;
 
     private async Task SendLoopAsync(CancellationToken ct)
     {
@@ -177,22 +216,57 @@ public sealed class SslTransport : ITransport
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
     {
+        // Closing a transport that is already disposed is a normal race, not a caller error: a
+        // session teardown and an application-initiated close can reach here from two directions.
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        await CloseCoreAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shuts the connection down. Called by <see cref="CloseAsync"/> and by the dispose path, which
+    /// has already marked the transport disposed and must not be turned away by that guard.
+    /// </summary>
+    private async ValueTask CloseCoreAsync(CancellationToken cancellationToken)
+    {
         await _sendPipe.Writer.CompleteAsync().ConfigureAwait(false);
 
+        // Completing the writer makes the send loop flush what is still queued and then exit by
+        // itself. Cancelling before that would abandon everything the pipe is holding, so the loop
+        // gets a bounded window to reach the peer; a peer that stopped reading cannot stall
+        // shutdown beyond it.
+        if (_sendTask is not null)
+        {
+            try
+            {
+                await _sendTask.WaitAsync(DrainTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timed out, cancelled, or the loop already faulted — nothing left to drain.
+            }
+        }
+
+        try
+        {
 #if NET8_0_OR_GREATER
-        await _cts.CancelAsync().ConfigureAwait(false);
+            await _cts.CancelAsync().ConfigureAwait(false);
 #else
-        _cts.Cancel();
+            _cts.Cancel();
 #endif
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed while draining — the loops are already being torn down.
+            return;
+        }
 
         if (_receiveTask is not null)
         {
             await _receiveTask.ConfigureAwait(false);
-        }
-
-        if (_sendTask is not null)
-        {
-            await _sendTask.ConfigureAwait(false);
         }
 
         if (_sslStream is not null)
@@ -213,14 +287,20 @@ public sealed class SslTransport : ITransport
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
-        
-        _disposed = true;
 
-        await CloseAsync().ConfigureAwait(false);
+        await CloseCoreAsync(CancellationToken.None).ConfigureAwait(false);
+
+        // A Pipe only returns its rented segments once both ends are completed, and the receive
+        // loop only ever completes the writer. Consumers are done by the time the transport is
+        // disposed, so this is the first point where completing the reader cannot pull buffers
+        // out from under an in-flight read.
+        await _receivePipe.Reader.CompleteAsync().ConfigureAwait(false);
+        await _receivePipe.Writer.CompleteAsync().ConfigureAwait(false);
+
         _cts.Dispose();
     }
 }

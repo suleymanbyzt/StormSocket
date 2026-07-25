@@ -30,10 +30,22 @@ public class StormTcpServer : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _acceptTask;
     private readonly MiddlewarePipeline _pipeline = new();
+
+    private readonly AsyncEventSource<SessionConnectedHandler> _onConnected = new();
+    private readonly AsyncEventSource<SessionDisconnectedHandler> _onDisconnected = new();
+    private readonly AsyncEventSource<DataReceivedHandler> _onDataReceived = new();
+    private readonly AsyncEventSource<ErrorHandler> _onError = new();
+    private readonly ConnectionGate _connectionGate;
     private bool _disposed;
 
     /// <summary>Server-wide aggregate metrics (connections, messages, bytes, errors).</summary>
     public ServerMetrics Metrics { get; } = new();
+
+    /// <summary>
+    /// The endpoint the listener is actually bound to, available once <c>StartAsync</c> has returned.
+    /// Bind to port 0 and read this to discover the port the OS assigned.
+    /// </summary>
+    public EndPoint? LocalEndPoint => _listenSocket?.LocalEndPoint;
 
     /// <summary>All currently connected sessions, keyed by ID.</summary>
     public SessionManager Sessions { get; } = new();
@@ -53,7 +65,11 @@ public class StormTcpServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event SessionConnectedHandler? OnConnected;
+    public event SessionConnectedHandler? OnConnected
+    {
+        add => _onConnected.Add(value);
+        remove => _onConnected.Remove(value);
+    }
 
     /// <summary>
     /// Fired when a client disconnects (gracefully or not).
@@ -67,7 +83,11 @@ public class StormTcpServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event SessionDisconnectedHandler? OnDisconnected;
+    public event SessionDisconnectedHandler? OnDisconnected
+    {
+        add => _onDisconnected.Add(value);
+        remove => _onDisconnected.Remove(value);
+    }
 
     /// <summary>
     /// Fired when data (or a framed message) is received from a client.
@@ -83,7 +103,11 @@ public class StormTcpServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event DataReceivedHandler? OnDataReceived;
+    public event DataReceivedHandler? OnDataReceived
+    {
+        add => _onDataReceived.Add(value);
+        remove => _onDataReceived.Remove(value);
+    }
 
     /// <summary>
     /// Fired when an error occurs during connection handling.
@@ -98,16 +122,40 @@ public class StormTcpServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event ErrorHandler? OnError;
+    public event ErrorHandler? OnError
+    {
+        add => _onError.Add(value);
+        remove => _onError.Remove(value);
+    }
 
     public StormTcpServer(ServerOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormTcpServer>();
+        _connectionGate = new ConnectionGate(options.MaxConnections, options.MaxConnectionsPerIp);
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
     public void UseMiddleware(IConnectionMiddleware middleware) => _pipeline.Use(middleware);
+
+    /// <summary>
+    /// Invokes every OnError subscriber in registration order. Never throws: a handler that fails is
+    /// logged, because this also runs on paths that are already tearing a connection down.
+    /// </summary>
+    private async ValueTask RaiseErrorAsync(ISession? session, Exception exception)
+    {
+        foreach (ErrorHandler handler in _onError.Handlers)
+        {
+            try
+            {
+                await handler(session, exception).ConfigureAwait(false);
+            }
+            catch (Exception handlerEx)
+            {
+                _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+            }
+        }
+    }
 
     /// <summary>Binds to the configured endpoint and starts accepting connections.</summary>
     public Task StartAsync(CancellationToken cancellationToken = default)
@@ -216,10 +264,10 @@ public class StormTcpServer : IAsyncDisposable
                 break;
             }
 
-            // enforce max connections limit
-            if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
+            // Claimed before the handshake so half-open connections count against the limits too
+            if (!_connectionGate.TryAcquire(clientSocket.RemoteEndPoint, out IPAddress? lease))
             {
-                _logger.LogDebug("Connection rejected: max connections ({MaxConnections}) reached", _options.MaxConnections);
+                _logger.LogDebug("Connection rejected: connection limit reached");
                 clientSocket.Close();
                 continue;
             }
@@ -234,11 +282,11 @@ public class StormTcpServer : IAsyncDisposable
 
             _options.Socket.ApplyKeepAlive(clientSocket);
 
-            _ = HandleConnectionAsync(clientSocket, ct);
+            _ = HandleConnectionAsync(clientSocket, lease, ct);
         }
     }
 
-    private async Task HandleConnectionAsync(Socket socket, CancellationToken ct)
+    private async Task HandleConnectionAsync(Socket socket, IPAddress? lease, CancellationToken ct)
     {
         long id = ConnectionId.Next();
         ITransport transport;
@@ -249,7 +297,9 @@ public class StormTcpServer : IAsyncDisposable
                 socket,
                 _options.Ssl.Certificate,
                 _options.Ssl.Protocols,
-                _options.Ssl.ClientCertificateRequired);
+                _options.Ssl.ClientCertificateRequired,
+                maxPendingReceiveBytes: _options.Socket.MaxPendingReceiveBytes,
+                maxPendingSendBytes: _options.Socket.MaxPendingSendBytes);
         }
         else
         {
@@ -260,7 +310,16 @@ public class StormTcpServer : IAsyncDisposable
         try
         {
             long handshakeStart = Stopwatch.GetTimestamp();
-            await transport.HandshakeAsync(ct).ConfigureAwait(false);
+
+            // A peer that completes TCP and then stalls mid-TLS would otherwise hold this socket,
+            // its pipes and this task for the lifetime of the process.
+            using CancellationTokenSource tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (_options.TlsHandshakeTimeout > TimeSpan.Zero && _options.TlsHandshakeTimeout != Timeout.InfiniteTimeSpan)
+            {
+                tlsCts.CancelAfter(_options.TlsHandshakeTimeout);
+            }
+
+            await transport.HandshakeAsync(tlsCts.Token).ConfigureAwait(false);
             Metrics.RecordHandshakeDuration(StopwatchHelper.GetElapsedTime(handshakeStart));
 
             IMessageFramer framer = _options.Framer ?? RawFramer.Instance;
@@ -282,11 +341,11 @@ public class StormTcpServer : IAsyncDisposable
                     ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, data).ConfigureAwait(false);
                     if (processed.IsEmpty) return;
 
-                    if (OnDataReceived is not null)
+                    foreach (DataReceivedHandler handler in _onDataReceived.Handlers)
                     {
                         try
                         {
-                            await OnDataReceived.Invoke(session, processed).ConfigureAwait(false);
+                            await handler(session, processed).ConfigureAwait(false);
                         }
                         catch (Exception handlerEx)
                         {
@@ -296,17 +355,7 @@ public class StormTcpServer : IAsyncDisposable
                 },
                 async ex =>
                 {
-                    if (OnError is not null)
-                    {
-                        try
-                        {
-                            await OnError.Invoke(session, ex).ConfigureAwait(false);
-                        }
-                        catch (Exception handlerEx)
-                        {
-                            _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
-                        }
-                    }
+                    await RaiseErrorAsync(session, ex).ConfigureAwait(false);
                 });
 
             session = new TcpSession(id, transport, connection, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
@@ -318,7 +367,9 @@ public class StormTcpServer : IAsyncDisposable
             // Route socket errors to the server's OnError event
             if (transport is TcpTransport tcp)
             {
-                tcp.OnSocketError = error => { OnError?.Invoke(session, new SocketException((int)error)); };
+                // The transport callback is synchronous, so the handlers run detached.
+                // RaiseErrorAsync swallows and logs handler failures, so nothing can fault here.
+                tcp.OnSocketError = error => _ = RaiseErrorAsync(session, new SocketException((int)error)).AsTask();
             }
 
             // Setup idle timeout
@@ -336,11 +387,11 @@ public class StormTcpServer : IAsyncDisposable
             }
 
             await _pipeline.OnConnectedAsync(session).ConfigureAwait(false);
-            if (OnConnected is not null)
+            foreach (SessionConnectedHandler handler in _onConnected.Handlers)
             {
                 try
                 {
-                    await OnConnected.Invoke(session).ConfigureAwait(false);
+                    await handler(session).ConfigureAwait(false);
                 }
                 catch (Exception handlerEx)
                 {
@@ -369,17 +420,7 @@ public class StormTcpServer : IAsyncDisposable
                 }
             }
 
-            if (OnError is not null)
-            {
-                try
-                {
-                    await OnError.Invoke(session, ex).ConfigureAwait(false);
-                }
-                catch (Exception handlerEx)
-                {
-                    _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
-                }
-            }
+            await RaiseErrorAsync(session, ex).ConfigureAwait(false);
         }
         finally
         {
@@ -405,11 +446,11 @@ public class StormTcpServer : IAsyncDisposable
                     _logger.LogError(mwEx, "Middleware OnDisconnected exception for session {SessionId}", session.Id);
                 }
 
-                if (OnDisconnected is not null)
+                foreach (SessionDisconnectedHandler handler in _onDisconnected.Handlers)
                 {
                     try
                     {
-                        await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
+                        await handler(session, reason).ConfigureAwait(false);
                     }
                     catch (Exception handlerEx)
                     {
@@ -423,6 +464,8 @@ public class StormTcpServer : IAsyncDisposable
             {
                 await transport.DisposeAsync().ConfigureAwait(false);
             }
+
+            _connectionGate.Release(lease);
         }
     }
 

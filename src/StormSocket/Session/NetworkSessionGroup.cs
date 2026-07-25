@@ -8,7 +8,16 @@ namespace StormSocket.Session;
 /// </summary>
 public sealed class NetworkSessionGroup
 {
+    // A detached session may still be handed to Add/JoinGroup by a disconnect handler, which runs
+    // after RemoveFromAll. The latch only has to outlive that handler chain, so entries are kept for
+    // a wide margin and then pruned; keeping them forever would grow with the process lifetime.
+    private const long DetachRetentionMs = 60_000;
+    private const int DetachPruneThreshold = 1024;
+    private const long DetachPruneIntervalMs = 1_000;
+
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<long, ISession>> _groups = new();
+    private readonly ConcurrentDictionary<long, long> _detachedSessions = new();
+    private long _nextPruneMs;
 
     /// <summary>Adds a session to a named group. Creates the group if it doesn't exist.</summary>
     public void Add(string group, ISession session)
@@ -24,9 +33,20 @@ public sealed class NetworkSessionGroup
         session.LeaveGroup(group);
     }
 
-    /// <summary>Removes a session from all groups it belongs to (called on disconnect).</summary>
+    /// <summary>
+    /// Removes a session from all groups it belongs to (called on disconnect).
+    /// The session is permanently detached: any later <see cref="Add"/> or <c>JoinGroup</c> for it —
+    /// typically from an OnDisconnected handler, which runs after this call — is ignored, because
+    /// nothing would ever remove the session again.
+    /// </summary>
     public void RemoveFromAll(ISession session)
     {
+        long now = Environment.TickCount64;
+
+        // Latch before unregistering: a registration that still observes the session as attached must
+        // land in the dictionary before the sweep below reaches it, never after.
+        _detachedSessions[session.Id] = now;
+
         // Snapshot group list to avoid modification during iteration
         foreach (string group in session.Groups)
         {
@@ -42,6 +62,8 @@ public sealed class NetworkSessionGroup
         {
             ws.ClearGroups();
         }
+
+        PruneDetached(now);
     }
 
     /// <summary>
@@ -50,8 +72,29 @@ public sealed class NetworkSessionGroup
     /// </summary>
     internal void RegisterSession(string group, ISession session)
     {
-        ConcurrentDictionary<long, ISession> members = _groups.GetOrAdd(group, _ => new ConcurrentDictionary<long, ISession>());
-        members.TryAdd(session.Id, session);
+        while (true)
+        {
+            ConcurrentDictionary<long, ISession> members = _groups.GetOrAdd(group, static _ => new ConcurrentDictionary<long, ISession>());
+            members.TryAdd(session.Id, session);
+
+            // Re-checked after the add so that a concurrent RemoveFromAll either sees this member and
+            // sweeps it, or is seen here and undone — no interleaving can leave the session behind.
+            if (_detachedSessions.ContainsKey(session.Id))
+            {
+                members.TryRemove(session.Id, out _);
+                TryRemoveEmptyGroup(group, members);
+                return;
+            }
+
+            if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? current) && ReferenceEquals(current, members))
+            {
+                return;
+            }
+
+            // A concurrent removal detached this instance from _groups after observing it empty;
+            // the member would be invisible to every reader, so retry against the published one.
+            members.TryRemove(session.Id, out _);
+        }
     }
 
     /// <summary>
@@ -63,9 +106,59 @@ public sealed class NetworkSessionGroup
         if (_groups.TryGetValue(group, out ConcurrentDictionary<long, ISession>? members))
         {
             members.TryRemove(session.Id, out _);
-            if (members.IsEmpty)
+            TryRemoveEmptyGroup(group, members);
+        }
+    }
+
+    private void TryRemoveEmptyGroup(string group, ConcurrentDictionary<long, ISession> members)
+    {
+        if (!members.IsEmpty)
+        {
+            return;
+        }
+
+        // Remove the exact instance observed as empty: a concurrent registration may already have
+        // published a different one under this name, and dropping that would lose its members.
+        ICollection<KeyValuePair<string, ConcurrentDictionary<long, ISession>>> groups = _groups;
+        if (!groups.Remove(new KeyValuePair<string, ConcurrentDictionary<long, ISession>>(group, members)))
+        {
+            return;
+        }
+
+        // A registration that slipped in between the emptiness check and the removal added to the
+        // instance just detached, so republish it instead of silently dropping that member.
+        if (!members.IsEmpty)
+        {
+            ConcurrentDictionary<long, ISession> current = _groups.GetOrAdd(group, members);
+            if (!ReferenceEquals(current, members))
             {
-                _groups.TryRemove(group, out _);
+                foreach (KeyValuePair<long, ISession> member in members)
+                {
+                    current.TryAdd(member.Key, member.Value);
+                }
+            }
+        }
+    }
+
+    private void PruneDetached(long now)
+    {
+        if (_detachedSessions.Count < DetachPruneThreshold)
+        {
+            return;
+        }
+
+        long nextPrune = Volatile.Read(ref _nextPruneMs);
+        if (now < nextPrune || Interlocked.CompareExchange(ref _nextPruneMs, now + DetachPruneIntervalMs, nextPrune) != nextPrune)
+        {
+            return;
+        }
+
+        ICollection<KeyValuePair<long, long>> detached = _detachedSessions;
+        foreach (KeyValuePair<long, long> entry in _detachedSessions)
+        {
+            if (now - entry.Value >= DetachRetentionMs)
+            {
+                detached.Remove(entry);
             }
         }
     }
@@ -78,6 +171,9 @@ public sealed class NetworkSessionGroup
             return;
         }
 
+        // Dispatch to everyone first, then await: awaiting inside the loop would let one member on
+        // SlowConsumerPolicy.Wait stall delivery to every member behind it.
+        List<ValueTask> tasks = [];
         foreach (ISession session in members.Values)
         {
             if (session.Id == excludeId)
@@ -87,7 +183,19 @@ public sealed class NetworkSessionGroup
 
             try
             {
-                await session.SendAsync(data, cancellationToken).ConfigureAwait(false);
+                tasks.Add(session.SendAsync(data, cancellationToken));
+            }
+            catch
+            {
+                // a synchronous throw must not abandon the ValueTasks already collected.
+            }
+        }
+
+        foreach (ValueTask task in tasks)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
             }
             catch
             {

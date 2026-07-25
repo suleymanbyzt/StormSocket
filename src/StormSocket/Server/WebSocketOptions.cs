@@ -49,4 +49,23 @@ public sealed class WebSocketOptions
     /// Set to <see cref="TimeSpan.Zero"/> to disable. Default: disabled.
     /// </summary>
     public TimeSpan IdleTimeout { get; init; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// Maximum total size of the HTTP upgrade request (request line plus all headers). Default: 16 KB.
+    /// </summary>
+    /// <remarks>
+    /// Without this cap a single client can stream headers forever and force the server to buffer and
+    /// rescan them, which costs far more memory and CPU on the server than it costs the attacker.
+    /// Connections that exceed it are answered with 431 and closed.
+    /// </remarks>
+    public int MaxRequestHeaderBytes { get; init; } = 16 * 1024;
+
+    /// <summary>Maximum number of headers accepted in the upgrade request. Default: 100.</summary>
+    public int MaxRequestHeaderCount { get; init; } = 100;
+
+    /// <summary>
+    /// How long to wait for the peer's Close frame after this endpoint starts the closing handshake
+    /// (RFC 6455 Section 7.1.4). Set to <see cref="TimeSpan.Zero"/> to drop TCP immediately. Default: 5 seconds.
+    /// </summary>
+    public TimeSpan CloseTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }

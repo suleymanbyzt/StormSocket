@@ -105,10 +105,7 @@ public static class WsFrameEncoder
         RandomNumberGenerator.Fill(maskKey);
         offset += 4;
 
-        for (int i = 0; i < payloadLength; i++)
-        {
-            span[offset + i] = (byte)(payload[i] ^ maskKey[i & 3]);
-        }
+        WsMasking.ApplyMask(payload, span.Slice(offset, payloadLength), maskKey);
 
         writer.Advance(headerSize + payloadLength);
     }

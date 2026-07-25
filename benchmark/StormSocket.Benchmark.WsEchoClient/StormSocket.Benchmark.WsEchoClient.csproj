@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\src\StormSocket\StormSocket.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\LatencyRecorder.cs" Link="LatencyRecorder.cs" />
+  </ItemGroup>
+
 </Project>

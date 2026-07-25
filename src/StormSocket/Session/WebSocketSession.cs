@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Net;
 using System.Text;
@@ -27,6 +28,15 @@ public sealed class WebSocketSession : IWebSocketSession
     private volatile bool _isBackpressured;
     private int _disconnectReason;
     private int _closeGuard;
+    private int _closeFrameSent;
+    private volatile bool _closeReceived;
+    private readonly TaskCompletionSource _closeHandshake = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _closeCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Upper bound on how long a second caller waits for an in-flight close to finish.</summary>
+    private static readonly TimeSpan CloseObservationTimeout = TimeSpan.FromSeconds(30);
+    private TimeSpan _closeTimeout = TimeSpan.FromSeconds(5);
+    private Task? _abortTask;
     private WsHeartbeat? _heartbeat;
     private WsPerMessageDeflate? _deflate;
     private IdleTimer? _idleTimer;
@@ -37,7 +47,12 @@ public sealed class WebSocketSession : IWebSocketSession
     public ConnectionMetrics Metrics { get; } = new();
     public EndPoint? RemoteEndPoint { get; }
     public bool IsBackpressured => _isBackpressured;
-    public IDictionary<string, object?> Items { get; } = new Dictionary<string, object?>();
+
+    /// <remarks>
+    /// Concurrent by design: the read loop, heartbeat/idle timers and application threads all reach
+    /// session state, and a plain Dictionary corrupts its buckets under concurrent writes.
+    /// </remarks>
+    public IDictionary<string, object?> Items { get; } = new ConcurrentDictionary<string, object?>();
 
     public T? Get<T>(SessionKey<T> key)
     {
@@ -118,6 +133,32 @@ public sealed class WebSocketSession : IWebSocketSession
         _heartbeat?.OnPongReceived();
     }
 
+    internal void SetCloseTimeout(TimeSpan closeTimeout) => _closeTimeout = closeTimeout;
+
+    /// <summary>True once the peer's Close frame has been received (RFC 6455 Section 5.5.1).</summary>
+    internal bool CloseReceived => _closeReceived;
+
+    /// <summary>Records the peer's Close frame and releases anyone waiting on the close handshake.</summary>
+    internal void NotifyCloseReceived()
+    {
+        _closeReceived = true;
+        _closeHandshake.TrySetResult();
+    }
+
+    /// <summary>
+    /// Writes a Close frame unless one has already been sent on this connection. RFC 6455 Section 6.1:
+    /// an endpoint must not send anything after its Close frame, so the first status wins.
+    /// </summary>
+    internal ValueTask SendCloseFrameAsync(WsCloseStatus status, CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _closeFrameSent, 1) != 0)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, status), cancellationToken: cancellationToken);
+    }
+
     /// <summary>
     /// Acquires the write lock, writes a frame, and flushes.
     /// All PipeWriter access MUST go through this method.
@@ -129,8 +170,20 @@ public sealed class WebSocketSession : IWebSocketSession
             return ValueTask.CompletedTask;
         }
 
-        // Fast path: try to acquire lock synchronously (no contention)
-        if (_writeLock.Wait(0))
+        // Fast path: try to acquire lock synchronously (no contention).
+        // A concurrent DisposeAsync can retire the lock between the state check above and here;
+        // that is a closed connection, not a caller error, so it is reported as a no-op.
+        bool acquired;
+        try
+        {
+            acquired = _writeLock.Wait(0);
+        }
+        catch (ObjectDisposedException)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        if (acquired)
         {
             try
             {
@@ -191,7 +244,15 @@ public sealed class WebSocketSession : IWebSocketSession
 
     private async ValueTask WriteFrameSlowLockAsync(Action<PipeWriter> writeAction, int byteCount, CancellationToken cancellationToken)
     {
-        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
         try
         {
             writeAction(_transport.Output);
@@ -231,6 +292,11 @@ public sealed class WebSocketSession : IWebSocketSession
     /// <summary>Sends a Binary WebSocket frame to the client.</summary>
     public ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
+        if (_state is not ConnectionState.Connected)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         if (_policy != SlowConsumerPolicy.Wait && _isBackpressured)
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
@@ -242,12 +308,13 @@ public sealed class WebSocketSession : IWebSocketSession
             return ValueTask.CompletedTask;
         }
 
+        // Compression runs inside the write action, i.e. under the write lock: the deflate context is
+        // per-connection mutable state and its output order has to match the order frames hit the wire.
         if (_deflate is not null && _deflate.ShouldCompress(data.Length))
         {
-            byte[] compressed = _deflate.Compress(data.Span);
             return WriteFrameAsync(
-                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Binary, compressed, rsv1: true),
-                compressed.Length,
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Binary, _deflate.Compress(data.Span), rsv1: true),
+                data.Length,
                 cancellationToken);
         }
 
@@ -260,6 +327,11 @@ public sealed class WebSocketSession : IWebSocketSession
     /// <summary>Sends a Text WebSocket frame (UTF-8 encoded) to the client.</summary>
     public ValueTask SendTextAsync(string text, CancellationToken cancellationToken = default)
     {
+        if (_state is not ConnectionState.Connected)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         if (_policy != SlowConsumerPolicy.Wait && _isBackpressured)
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
@@ -277,12 +349,18 @@ public sealed class WebSocketSession : IWebSocketSession
 
         if (_deflate is not null && _deflate.ShouldCompress(written))
         {
-            byte[] compressed = _deflate.Compress(rented.AsSpan(0, written));
-            ArrayPool<byte>.Shared.Return(rented);
-            return WriteFrameAsync(
-                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, compressed, rsv1: true),
-                compressed.Length,
+            ValueTask compressedTask = WriteFrameAsync(
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, _deflate.Compress(rented.AsSpan(0, written)), rsv1: true),
+                written,
                 cancellationToken);
+
+            if (compressedTask.IsCompletedSuccessfully)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+                return ValueTask.CompletedTask;
+            }
+
+            return ReturnBufferAfterWriteAsync(compressedTask, rented);
         }
 
         ValueTask task = WriteFrameAsync(
@@ -313,6 +391,11 @@ public sealed class WebSocketSession : IWebSocketSession
     /// <summary>Sends a Text WebSocket frame from pre-encoded UTF-8 bytes (zero-copy).</summary>
     public ValueTask SendTextAsync(ReadOnlyMemory<byte> utf8Data, CancellationToken cancellationToken = default)
     {
+        if (_state is not ConnectionState.Connected)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         if (_policy != SlowConsumerPolicy.Wait && _isBackpressured)
         {
             if (_policy == SlowConsumerPolicy.Disconnect)
@@ -326,10 +409,9 @@ public sealed class WebSocketSession : IWebSocketSession
 
         if (_deflate is not null && _deflate.ShouldCompress(utf8Data.Length))
         {
-            byte[] compressed = _deflate.Compress(utf8Data.Span);
             return WriteFrameAsync(
-                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, compressed, rsv1: true),
-                compressed.Length,
+                writer => WsFrameEncoder.WriteFrame(writer, WsOpCode.Text, _deflate.Compress(utf8Data.Span), rsv1: true),
+                utf8Data.Length,
                 cancellationToken);
         }
 
@@ -340,10 +422,38 @@ public sealed class WebSocketSession : IWebSocketSession
     }
 
     /// <summary>Sends a Close frame and shuts down the connection.</summary>
-    public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
+    public ValueTask CloseAsync(CancellationToken cancellationToken = default)
+        => CloseAsync(WsCloseStatus.NormalClosure, cancellationToken);
+
+    /// <summary>Sends a Close frame with an explicit status code and shuts down the connection.</summary>
+    /// <remarks>
+    /// When this endpoint starts the closing handshake it waits for the peer's Close frame before
+    /// dropping TCP (RFC 6455 Section 7.1.4), so the peer reports the status sent here instead of an
+    /// abnormal 1006. The wait is bounded by the configured close timeout.
+    /// </remarks>
+    public ValueTask CloseAsync(WsCloseStatus status, CancellationToken cancellationToken = default)
+        => CloseAsync(status, waitForPeer: true, cancellationToken);
+
+    /// <param name="waitForPeer">
+    /// False when the peer is already known to be gone (heartbeat timeout, idle timeout): waiting for
+    /// a Close frame that will never arrive would just stall teardown for the full close timeout.
+    /// </param>
+    internal async ValueTask CloseAsync(WsCloseStatus status, bool waitForPeer, CancellationToken cancellationToken = default)
     {
         if (Interlocked.CompareExchange(ref _closeGuard, 1, 0) != 0)
         {
+            // Another close is already running. Waiting for it rather than returning immediately is
+            // what keeps DisposeAsync from retiring the transport underneath an in-flight close —
+            // that close is parked in the closing handshake and will come back to use it.
+            try
+            {
+                await _closeCompleted.Task.WaitAsync(CloseObservationTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The owner is stuck or the caller gave up; teardown proceeds either way.
+            }
+
             return;
         }
 
@@ -352,15 +462,20 @@ public sealed class WebSocketSession : IWebSocketSession
 
         try
         {
-            await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            // A Close frame may already have gone out (protocol error, echo of the peer's close).
+            // RFC 6455 Section 6.1 forbids sending a second one.
+            if (Interlocked.Exchange(ref _closeFrameSent, 1) == 0)
             {
-                WsFrameEncoder.WriteClose(_transport.Output);
-                await _transport.Output.FlushAsync(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _writeLock.Release();
+                await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    WsFrameEncoder.WriteClose(_transport.Output, status);
+                    await _transport.Output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
             }
         }
         catch
@@ -368,8 +483,29 @@ public sealed class WebSocketSession : IWebSocketSession
             // ignored
         }
 
-        await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
-        _state = ConnectionState.Closed;
+        // RFC 6455 Section 7.1.4: the endpoint that starts the handshake waits for the peer's Close
+        // before tearing down TCP, otherwise the peer sees an abnormal closure.
+        if (waitForPeer && !_closeReceived && _closeTimeout > TimeSpan.Zero)
+        {
+            try
+            {
+                await _closeHandshake.Task.WaitAsync(_closeTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Peer never answered — fall through and close anyway.
+            }
+        }
+
+        try
+        {
+            await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _state = ConnectionState.Closed;
+            _closeCompleted.TrySetResult();
+        }
     }
 
     public void Abort()
@@ -381,7 +517,23 @@ public sealed class WebSocketSession : IWebSocketSession
 
         SetDisconnectReason(DisconnectReason.Aborted);
         _state = ConnectionState.Closing;
-        _ = _transport.CloseAsync();
+
+        // Abort is synchronous by contract, so the close runs detached — but it is still published
+        // so DisposeAsync can await it instead of tearing the transport down underneath it.
+        _abortTask = AbortCoreAsync();
+    }
+
+    private async Task AbortCoreAsync()
+    {
+        try
+        {
+            await _transport.CloseAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _state = ConnectionState.Closed;
+            _closeCompleted.TrySetResult();
+        }
     }
 
     public void JoinGroup(string group)
@@ -414,7 +566,24 @@ public sealed class WebSocketSession : IWebSocketSession
 
     public async ValueTask DisposeAsync()
     {
-        await CloseAsync().ConfigureAwait(false);
+        // waitForPeer: false — by the time a session is disposed its read loop has ended, so a Close
+        // frame from the peer could no longer be observed. Waiting for one would only delay closing
+        // the socket, which the peer reads as a server that never completed the handshake.
+        await CloseAsync(WsCloseStatus.NormalClosure, waitForPeer: false).ConfigureAwait(false);
+
+        if (_abortTask is not null)
+        {
+            try
+            {
+                await _abortTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        _state = ConnectionState.Closed;
 
         if (_heartbeat is not null)
         {
@@ -424,6 +593,17 @@ public sealed class WebSocketSession : IWebSocketSession
         if (_idleTimer is not null)
         {
             await _idleTimer.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // Take the write lock before retiring it and the deflate context, so an in-flight send
+        // finishes first instead of faulting on disposed state.
+        try
+        {
+            await _writeLock.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // ignored
         }
 
         _deflate?.Dispose();

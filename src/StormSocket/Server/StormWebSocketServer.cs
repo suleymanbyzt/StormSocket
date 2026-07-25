@@ -40,8 +40,21 @@ public class StormWebSocketServer : IAsyncDisposable
     private readonly MiddlewarePipeline _pipeline = new();
     private bool _disposed;
 
+    private readonly AsyncEventSource<WsConnectedHandler> _onConnected = new();
+    private readonly AsyncEventSource<WsDisconnectedHandler> _onDisconnected = new();
+    private readonly AsyncEventSource<WsMessageReceivedHandler> _onMessageReceived = new();
+    private readonly AsyncEventSource<ErrorHandler> _onError = new();
+    private readonly AsyncEventSource<WsConnectingHandler> _onConnecting = new();
+    private readonly ConnectionGate _connectionGate;
+
     /// <summary>Server-wide aggregate metrics (connections, messages, bytes, errors).</summary>
     public ServerMetrics Metrics { get; } = new();
+
+    /// <summary>
+    /// The endpoint the listener is actually bound to, available once <c>StartAsync</c> has returned.
+    /// Bind to port 0 and read this to discover the port the OS assigned.
+    /// </summary>
+    public EndPoint? LocalEndPoint => _listenSocket?.LocalEndPoint;
 
     /// <summary>All currently connected WebSocket sessions.</summary>
     public SessionManager Sessions { get; } = new();
@@ -61,7 +74,11 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event WsConnectedHandler? OnConnected;
+    public event WsConnectedHandler? OnConnected
+    {
+        add => _onConnected.Add(value);
+        remove => _onConnected.Remove(value);
+    }
 
     /// <summary>
     /// Fired when a WebSocket client disconnects (gracefully or not).
@@ -75,7 +92,11 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event WsDisconnectedHandler? OnDisconnected;
+    public event WsDisconnectedHandler? OnDisconnected
+    {
+        add => _onDisconnected.Add(value);
+        remove => _onDisconnected.Remove(value);
+    }
 
     /// <summary>
     /// Fired when a complete text or binary WebSocket message is received.
@@ -93,7 +114,11 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event WsMessageReceivedHandler? OnMessageReceived;
+    public event WsMessageReceivedHandler? OnMessageReceived
+    {
+        add => _onMessageReceived.Add(value);
+        remove => _onMessageReceived.Remove(value);
+    }
 
     /// <summary>
     /// Fired when an error occurs during connection handling.
@@ -108,7 +133,11 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event ErrorHandler? OnError;
+    public event ErrorHandler? OnError
+    {
+        add => _onError.Add(value);
+        remove => _onError.Remove(value);
+    }
 
     /// <summary>
     /// Fired before accepting a WebSocket upgrade request.
@@ -131,17 +160,41 @@ public class StormWebSocketServer : IAsyncDisposable
     /// </code>
     /// </example>
     /// </summary>
-    public event WsConnectingHandler? OnConnecting;
+    public event WsConnectingHandler? OnConnecting
+    {
+        add => _onConnecting.Add(value);
+        remove => _onConnecting.Remove(value);
+    }
 
     public StormWebSocketServer(ServerOptions options)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _wsOptions = options.WebSocket ?? new WebSocketOptions();
         _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<StormWebSocketServer>();
+        _connectionGate = new ConnectionGate(options.MaxConnections, options.MaxConnectionsPerIp);
     }
 
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
     public void UseMiddleware(IConnectionMiddleware middleware) => _pipeline.Use(middleware);
+
+    /// <summary>
+    /// Invokes every OnError subscriber in registration order. Never throws: a handler that fails is
+    /// logged, because this also runs on paths that are already tearing a connection down.
+    /// </summary>
+    private async ValueTask RaiseErrorAsync(ISession? session, Exception exception)
+    {
+        foreach (ErrorHandler handler in _onError.Handlers)
+        {
+            try
+            {
+                await handler(session, exception).ConfigureAwait(false);
+            }
+            catch (Exception handlerEx)
+            {
+                _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+            }
+        }
+    }
 
     /// <summary>Binds to the configured endpoint and starts accepting WebSocket connections.</summary>
     public Task StartAsync(CancellationToken cancellationToken = default)
@@ -234,7 +287,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 ws.SetDisconnectReason(DisconnectReason.GoingAway);
                 try
                 {
-                    await ws.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, WsCloseStatus.GoingAway));
+                    await ws.SendCloseFrameAsync(WsCloseStatus.GoingAway).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -270,10 +323,10 @@ public class StormWebSocketServer : IAsyncDisposable
                 break;
             }
 
-            // Enforce max connections limit
-            if (_options.MaxConnections > 0 && Sessions.Count >= _options.MaxConnections)
+            // Claimed before the handshake so half-open connections count against the limits too
+            if (!_connectionGate.TryAcquire(clientSocket.RemoteEndPoint, out IPAddress? lease))
             {
-                _logger.LogDebug("Connection rejected: max connections ({MaxConnections}) reached", _options.MaxConnections);
+                _logger.LogDebug("Connection rejected: connection limit reached");
                 clientSocket.Close();
                 continue;
             }
@@ -288,11 +341,11 @@ public class StormWebSocketServer : IAsyncDisposable
 
             _options.Socket.ApplyKeepAlive(clientSocket);
 
-            _ = HandleConnectionAsync(clientSocket, ct);
+            _ = HandleConnectionAsync(clientSocket, lease, ct);
         }
     }
 
-    private async Task HandleConnectionAsync(Socket socket, CancellationToken ct)
+    private async Task HandleConnectionAsync(Socket socket, IPAddress? lease, CancellationToken ct)
     {
         long id = ConnectionId.Next();
         ITransport transport;
@@ -303,7 +356,9 @@ public class StormWebSocketServer : IAsyncDisposable
                 socket,
                 _options.Ssl.Certificate,
                 _options.Ssl.Protocols,
-                _options.Ssl.ClientCertificateRequired);
+                _options.Ssl.ClientCertificateRequired,
+                maxPendingReceiveBytes: _options.Socket.MaxPendingReceiveBytes,
+                maxPendingSendBytes: _options.Socket.MaxPendingSendBytes);
         }
         else
         {
@@ -314,7 +369,16 @@ public class StormWebSocketServer : IAsyncDisposable
         try
         {
             long handshakeStart = Stopwatch.GetTimestamp();
-            await transport.HandshakeAsync(ct).ConfigureAwait(false);
+
+            // A peer that completes TCP and then stalls mid-TLS would otherwise hold this socket,
+            // its pipes and this task for the lifetime of the process.
+            using CancellationTokenSource tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (_options.TlsHandshakeTimeout > TimeSpan.Zero && _options.TlsHandshakeTimeout != Timeout.InfiniteTimeSpan)
+            {
+                tlsCts.CancelAfter(_options.TlsHandshakeTimeout);
+            }
+
+            await transport.HandshakeAsync(tlsCts.Token).ConfigureAwait(false);
 
             (bool upgradeSuccess, WsPerMessageDeflate? deflate) = await PerformUpgradeAsync(transport, socket.RemoteEndPoint, ct).ConfigureAwait(false);
             Metrics.RecordHandshakeDuration(StopwatchHelper.GetElapsedTime(handshakeStart));
@@ -327,6 +391,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
             session = new WebSocketSession(id, transport, socket.RemoteEndPoint, _options.SlowConsumerPolicy, Metrics);
             session.SetGroupManager(Groups);
+            session.SetCloseTimeout(_wsOptions.CloseTimeout);
             if (deflate is not null)
             {
                 session.SetCompression(deflate);
@@ -339,7 +404,9 @@ public class StormWebSocketServer : IAsyncDisposable
             // Route socket errors to the server's OnError event
             if (transport is TcpTransport tcp)
             {
-                tcp.OnSocketError = error => { OnError?.Invoke(session, new SocketException((int)error)); };
+                // The transport callback is synchronous, so the handlers run detached.
+                // RaiseErrorAsync swallows and logs handler failures, so nothing can fault here.
+                tcp.OnSocketError = error => _ = RaiseErrorAsync(session, new SocketException((int)error)).AsTask();
             }
 
             // Setup heartbeat with dead connection detection
@@ -355,7 +422,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 {
                     _logger.LogWarning("Session {SessionId} heartbeat timeout", session.Id);
                     session.SetDisconnectReason(DisconnectReason.HeartbeatTimeout);
-                    await session.CloseAsync(ct).ConfigureAwait(false);
+                    await session.CloseAsync(WsCloseStatus.GoingAway, waitForPeer: false, ct).ConfigureAwait(false);
                 };
                 session.SetHeartbeat(heartbeat);
                 heartbeat.Start();
@@ -376,11 +443,11 @@ public class StormWebSocketServer : IAsyncDisposable
             }
 
             await _pipeline.OnConnectedAsync(session).ConfigureAwait(false);
-            if (OnConnected is not null)
+            foreach (WsConnectedHandler handler in _onConnected.Handlers)
             {
                 try
                 {
-                    await OnConnected.Invoke(session).ConfigureAwait(false);
+                    await handler(session).ConfigureAwait(false);
                 }
                 catch (Exception handlerEx)
                 {
@@ -412,17 +479,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 }
             }
 
-            if (OnError is not null)
-            {
-                try
-                {
-                    await OnError.Invoke(session, ex).ConfigureAwait(false);
-                }
-                catch (Exception handlerEx)
-                {
-                    _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
-                }
-            }
+            await RaiseErrorAsync(session, ex).ConfigureAwait(false);
         }
         finally
         {
@@ -448,11 +505,11 @@ public class StormWebSocketServer : IAsyncDisposable
                     _logger.LogError(mwEx, "Middleware OnDisconnected exception for session {SessionId}", session.Id);
                 }
 
-                if (OnDisconnected is not null)
+                foreach (WsDisconnectedHandler handler in _onDisconnected.Handlers)
                 {
                     try
                     {
-                        await OnDisconnected.Invoke(session, reason).ConfigureAwait(false);
+                        await handler(session, reason).ConfigureAwait(false);
                     }
                     catch (Exception handlerEx)
                     {
@@ -466,6 +523,8 @@ public class StormWebSocketServer : IAsyncDisposable
             {
                 await transport.DisposeAsync().ConfigureAwait(false);
             }
+
+            _connectionGate.Release(lease);
         }
     }
 
@@ -480,6 +539,10 @@ public class StormWebSocketServer : IAsyncDisposable
 
         PipeReader reader = transport.Input;
 
+        // Carried across reads so the parser resumes where it stopped instead of rescanning the
+        // whole accumulated request every time a few more bytes arrive.
+        int scanOffset = 0;
+
         while (!cts.Token.IsCancellationRequested)
         {
             ReadResult result = await reader.ReadAsync(cts.Token).ConfigureAwait(false);
@@ -487,9 +550,13 @@ public class StormWebSocketServer : IAsyncDisposable
 
             WsUpgradeResult upgradeResult = WsUpgradeHandler.TryParseUpgradeRequest(
                 ref buffer,
+                ref scanOffset,
                 out WsUpgradeContext? context,
+                out byte[]? parseErrorResponse,
                 remoteEndPoint,
-                _wsOptions.AllowedOrigins);
+                _wsOptions.AllowedOrigins,
+                _wsOptions.MaxRequestHeaderBytes,
+                _wsOptions.MaxRequestHeaderCount);
 
             switch (upgradeResult)
             {
@@ -497,9 +564,23 @@ public class StormWebSocketServer : IAsyncDisposable
                     reader.AdvanceTo(buffer.Start, buffer.End);
 
                     // Fire OnConnecting event if registered
-                    if (OnConnecting is not null)
+                    if (_onConnecting.HasHandlers)
                     {
-                        await OnConnecting.Invoke(context!).ConfigureAwait(false);
+                        foreach (WsConnectingHandler handler in _onConnecting.Handlers)
+                        {
+                            try
+                            {
+                                await handler(context!).ConfigureAwait(false);
+                            }
+                            catch (Exception handlerEx)
+                            {
+                                // This is the authentication hook: a handler that blew up has not
+                                // approved anything, so the connection is refused rather than accepted.
+                                _logger.LogError(handlerEx, "Unhandled exception in OnConnecting handler");
+                                context!.Reject(500, "Internal Server Error");
+                                break;
+                            }
+                        }
 
                         // If handler didn't call Accept() or Reject(), auto-accept
                         if (!context!.IsHandled)
@@ -537,7 +618,8 @@ public class StormWebSocketServer : IAsyncDisposable
 
                 default:
                     reader.AdvanceTo(buffer.Start, buffer.End);
-                    byte[] errorResponse = WsUpgradeHandler.BuildErrorResponse(upgradeResult);
+                    _logger.LogDebug("Upgrade rejected for {RemoteEndPoint}: {Result}", remoteEndPoint, upgradeResult);
+                    byte[] errorResponse = parseErrorResponse ?? WsUpgradeHandler.BuildErrorResponse(upgradeResult);
                     await WriteResponseAsync(transport, errorResponse, ct).ConfigureAwait(false);
                     return (false, null);
             }
@@ -558,6 +640,10 @@ public class StormWebSocketServer : IAsyncDisposable
     {
         PipeReader reader = transport.Input;
         bool hasCompression = session.Compression is not null;
+        bool closeReceived = false;
+
+        // One scratch buffer for the whole connection instead of an array per masked frame.
+        using WsUnmaskBuffer unmaskBuffer = new();
 
         while (!ct.IsCancellationRequested)
         {
@@ -566,11 +652,27 @@ public class StormWebSocketServer : IAsyncDisposable
 
             try
             {
-                while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _wsOptions.MaxFrameSize, allowCompressedFrames: hasCompression))
+                // RFC 6455 Section 5.1: every client frame must be masked.
+                while (WsFrameDecoder.TryDecodeFrame(ref buffer, out WsFrame frame, _wsOptions.MaxFrameSize, hasCompression, expectMasked: true, unmaskBuffer))
                 {
+                    // Metered per frame, not per message: a ping flood or a stream of fragments
+                    // costs the server work without ever producing a message to meter.
+                    if (_pipeline.HasMiddleware && !await _pipeline.OnFrameReceivedAsync(session).ConfigureAwait(false))
+                    {
+                        closeReceived = true;
+                        break;
+                    }
+
                     if (frame.IsControl)
                     {
                         await HandleFrameAsync(session, transport, frame).ConfigureAwait(false);
+
+                        // RFC 6455 Section 5.5.1: nothing after the peer's Close frame is processed.
+                        if (frame.OpCode == WsOpCode.Close)
+                        {
+                            closeReceived = true;
+                            break;
+                        }
                     }
                     else
                     {
@@ -580,9 +682,17 @@ public class StormWebSocketServer : IAsyncDisposable
                             WsMessage msg = message.Value;
                             if (msg.Compressed && session.Compression is not null)
                             {
-                                byte[] decompressed = session.Compression.Decompress(msg.Data.Span);
+                                byte[] decompressed = session.Compression.Decompress(msg.Data.Span, _wsOptions.MaxMessageSize);
+
+                                // The compressed bytes could not be validated before inflating them.
+                                if (msg.IsText && !Utf8Validator.IsValid(decompressed))
+                                {
+                                    throw new WsProtocolException(WsCloseStatus.InvalidPayload, "Text message is not valid UTF-8.");
+                                }
+
                                 msg = new WsMessage { Data = decompressed, IsText = msg.IsText };
                             }
+
                             await HandleMessageAsync(session, msg).ConfigureAwait(false);
                         }
                     }
@@ -597,7 +707,7 @@ public class StormWebSocketServer : IAsyncDisposable
                 _logger.LogWarning("Session {SessionId} {Reason}: {Message}", session.Id, reason, ex.Message);
                 session.SetDisconnectReason(reason);
                 WsCloseStatus status = ex.CloseStatus;
-                await session.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, status), cancellationToken: ct);
+                await session.SendCloseFrameAsync(status, ct).ConfigureAwait(false);
 
                 try
                 {
@@ -608,24 +718,14 @@ public class StormWebSocketServer : IAsyncDisposable
                     _logger.LogError(mwEx, "Middleware OnError exception for session {SessionId}", session.Id);
                 }
 
-                if (OnError is not null)
-                {
-                    try
-                    {
-                        await OnError.Invoke(session, ex).ConfigureAwait(false);
-                    }
-                    catch (Exception handlerEx)
-                    {
-                        _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
-                    }
-                }
+                await RaiseErrorAsync(session, ex).ConfigureAwait(false);
 
                 break;
             }
 
             reader.AdvanceTo(buffer.Start, buffer.End);
 
-            if (result.IsCompleted)
+            if (closeReceived || result.IsCompleted)
             {
                 break;
             }
@@ -638,17 +738,23 @@ public class StormWebSocketServer : IAsyncDisposable
         session.Metrics.AddBytesReceived(msg.Data.Length);
         Metrics.RecordMessageReceived(msg.Data.Length);
 
-        ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
-        if (processed.IsEmpty)
+        // An empty result means a middleware suppressed the message — but a zero-length message is
+        // legal in RFC 6455 and must still reach the application, so the two are told apart by
+        // whether there was anything to suppress in the first place.
+        if (_pipeline.HasMiddleware)
         {
-            return;
+            ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
+            if (processed.IsEmpty && !msg.Data.IsEmpty)
+            {
+                return;
+            }
         }
 
-        if (OnMessageReceived is not null)
+        foreach (WsMessageReceivedHandler handler in _onMessageReceived.Handlers)
         {
             try
             {
-                await OnMessageReceived.Invoke(session, msg).ConfigureAwait(false);
+                await handler(session, msg).ConfigureAwait(false);
             }
             catch (Exception handlerEx)
             {
@@ -672,16 +778,14 @@ public class StormWebSocketServer : IAsyncDisposable
 
             case WsOpCode.Close:
                 session.SetDisconnectReason(DisconnectReason.ClosedByClient);
+                session.NotifyCloseReceived();
 
-                // Echo back the client's close status if present, otherwise NormalClosure
-                WsCloseStatus closeStatus = WsCloseStatus.NormalClosure;
-                if (frame.Payload.Length >= 2)
-                {
-                    closeStatus = (WsCloseStatus)System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(frame.Payload.Span);
-                }
+                // Validates the code and the UTF-8 reason, and throws for a 1-byte body or a code
+                // that must not appear on the wire (RFC 6455 Sections 5.5.1 and 7.4.1). The read
+                // loop turns that into a 1002/1007 close.
+                WsCloseStatus closeStatus = WsCloseFrame.ParseReceived(frame.Payload.Span);
 
-                WsCloseStatus echoStatus = closeStatus;
-                await session.WriteFrameAsync(writer => WsFrameEncoder.WriteClose(writer, echoStatus));
+                await session.SendCloseFrameAsync(WsCloseFrame.EchoFor(closeStatus)).ConfigureAwait(false);
                 await session.CloseAsync().ConfigureAwait(false);
                 break;
         }

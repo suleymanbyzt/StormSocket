@@ -43,7 +43,32 @@ public sealed class ServerOptions
     /// Maximum number of concurrent connections. 0 = unlimited. Default: 0.
     /// When the limit is reached, new connections are immediately closed.
     /// </summary>
+    /// <remarks>
+    /// Counts connections still negotiating TLS or the WebSocket upgrade as well as established
+    /// sessions — a limit that only counted established sessions could be walked straight past by
+    /// opening connections and never finishing the handshake.
+    /// </remarks>
     public int MaxConnections { get; init; } = 0;
+
+    /// <summary>
+    /// Maximum number of concurrent connections from a single remote IP address. 0 = unlimited. Default: 0.
+    /// </summary>
+    /// <remarks>
+    /// Counts connections that are still handshaking, so it bounds slowloris-style attacks from one
+    /// host. Ignored for Unix domain sockets. Behind a reverse proxy every connection appears to come
+    /// from the proxy, so leave this at 0 there.
+    /// </remarks>
+    public int MaxConnectionsPerIp { get; init; } = 0;
+
+    /// <summary>
+    /// Maximum time allowed for the TLS handshake on an accepted connection.
+    /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable. Default: 10 seconds.
+    /// </summary>
+    /// <remarks>
+    /// Without this a peer that completes the TCP handshake and then stalls mid-TLS holds a socket,
+    /// two pipes and a task for the lifetime of the process.
+    /// </remarks>
+    public TimeSpan TlsHandshakeTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Determines behavior when a session's send buffer reaches <see cref="SocketTuningOptions.MaxPendingSendBytes"/>.

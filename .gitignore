@@ -292,3 +292,5 @@ __pycache__/
 # DocFX
 _site/
 api/
+# Autobahn Testsuite output
+benchmark/autobahn/reports/

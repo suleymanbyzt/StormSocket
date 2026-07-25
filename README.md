@@ -26,7 +26,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 
 ## Why StormSocket?
 
-- **Pooled I/O** — `System.IO.Pipelines` buffer pool + `ArrayPool` for send encoding, minimal GC pressure
+- **Pooled I/O** — `System.IO.Pipelines` buffer pool, `ArrayPool` for send encoding, and per-connection unmask buffers, so steady-state message traffic allocates almost nothing
 - **Backpressure that actually works** — configurable pipe thresholds, OS TCP window propagates upstream
 - **Subscribe, don't subclass** — `server.OnDataReceived += handler`, no inheritance chains
 - **SSL is a config flag** — same server, add `SslOptions`, done
@@ -37,15 +37,15 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 
 - **Event-based API** - no subclassing, just `server.OnDataReceived += handler`
 - **TCP Server & Client** with optional message framing (raw, length-prefix, delimiter)
-- **WebSocket Server & Client** with full RFC 6455 compliance (text, binary, ping/pong, close, fragmentation/continuation frames, client-side masking)
+- **WebSocket Server & Client** built to RFC 6455, **247/247 Autobahn Testsuite conformance cases passing** — it *validates* the protocol rather than only speaking it: masking enforced in both directions, incremental UTF-8 validation across fragments (1007), close-code and close-reason validation (1002/1007), single close frame with a proper closing handshake, control-frame and frame-length rules, strict handshake validation
 - **SSL/TLS** as a simple configuration option on any server or client
 - **Auto-reconnect** - clients automatically reconnect on disconnect with configurable delay and max attempts
-- **System.IO.Pipelines** for zero-copy I/O with built-in backpressure
+- **System.IO.Pipelines** — received payloads are handed to handlers without a copy where the protocol allows it, with backpressure that reaches the socket
 - **Automatic heartbeat** with configurable ping interval and dead connection detection (missed pong counting)
 - **Session management** - track, query, broadcast, and kick connections
 - **Groups/Rooms** - named groups for targeted broadcast (chat rooms, game lobbies, etc.)
 - **WebSocket authentication** - access path, query params, headers (cookies, tokens) before accepting connections via `OnConnecting` event
-- **Rate limiting middleware** - opt-in per-session or per-IP rate limiting with configurable window, action (disconnect/drop), and exceeded event
+- **Rate limiting middleware** - opt-in per-session or per-IP limiting with a sliding window, configurable action (disconnect/drop) and exceeded event; meters control frames and fragments too, so a ping flood costs the sender budget
 - **Middleware pipeline** - intercept connect, disconnect, data received, data sending, and errors (works on both server and client)
 - **Backpressure & buffer limits** - configurable send/receive pipe limits prevent memory exhaustion
 - **[Per-session user data](docs/features.md#per-session-user-data)** - `session.Items` dictionary + strongly-typed `session.Get<T>` / `session.Set<T>` via `SessionKey<T>` — no external dictionary needed
@@ -53,7 +53,10 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 - **Message fragmentation** - automatic reassembly of fragmented WebSocket messages (RFC 6455 Section 5.4) with `MaxMessageSize` limit and send-side fragmentation helpers
 - **Connection idle timeout** - automatically close connections that haven't sent any application-level data within a configurable period (ping/pong does NOT reset the timer)
 - **Disconnect reason tracking** - `OnDisconnected` provides a `DisconnectReason` enum (`ClosedByClient`, `ClosedByServer`, `Aborted`, `ProtocolError`, `TransportError`, `HeartbeatTimeout`, `HandshakeTimeout`, `SlowConsumer`, `GoingAway`, `RateLimited`, `IdleTimeout`, `MessageTooBig`)
-- **Handshake timeout** - configurable timeout for WebSocket upgrade (DoS protection)
+- **Handshake timeout** - configurable timeout for the WebSocket upgrade, plus a separate `TlsHandshakeTimeout` so a peer cannot park mid-TLS
+- **Connection limits that count half-open connections** - `MaxConnections` and `MaxConnectionsPerIp` are claimed at accept time, before TLS and the upgrade, so slowloris-style connections cannot walk past them
+- **Bounded upgrade parsing** - `MaxRequestHeaderBytes` / `MaxRequestHeaderCount` (16 KB / 100 by default), answered with 431
+- **Bounded decompression** - permessage-deflate output is capped at `MaxMessageSize`, so a compression bomb fails the connection with 1009 instead of the process
 - **TCP Keep-Alive** - fine-tuning options (idle time, probe interval, probe count)
 - **Unix domain socket** transport — same API, just pass `UnixDomainSocketEndPoint` for fast local IPC (container-to-container, sidecar proxy)
 - **Multi-target**: net6.0, net7.0, net8.0, net9.0, net10.0
@@ -109,6 +112,10 @@ ws.OnMessageReceived += async (session, msg) =>
 
 await ws.StartAsync();
 ```
+
+> `msg.Data` points into a buffer the connection reuses for the next frame, so it is valid for the
+> duration of the handler. Copy it (`msg.Data.ToArray()`) if it outlives the call — a queue, a field,
+> a captured closure. `msg.Text` already returns an independent string.
 
 ### WebSocket Client
 
@@ -263,7 +270,7 @@ ws.OnDisconnected += async (session, reason) =>
 | Principle | How |
 |---|---|
 | **Composition over inheritance** | Flat structure, no deep inheritance chains. |
-| **System.IO.Pipelines** | Zero-copy I/O with kernel-level backpressure. |
+| **System.IO.Pipelines** | Copy-free receive path where the protocol allows it, backpressure down to the socket. |
 | **Event-based API** | Subscribe to events, no need to subclass. |
 | **SSL as decorator** | Same server, just add `SslOptions`. |
 | **Integer session IDs** | `Interlocked.Increment` (fast, sortable) instead of Guid. |
@@ -272,30 +279,86 @@ ws.OnDisconnected += async (session, reason) =>
 
 # Benchmarks
 
-Echo round-trip: 100 concurrent clients, 32-byte messages, 10-second sustained load.
+Two different things get called "performance", and they are measured separately here because one
+cannot be derived from the other: a deeply pipelined run can push millions of messages per second
+while any single message waits milliseconds behind the ones queued ahead of it.
 
-### TCP Echo
+Numbers below are from an Apple M-series laptop, .NET 9, server GC, loopback, client and server on
+the same machine — treat them as a shape, not a spec sheet, and run them yourself.
 
-| Metric | StormSocket | NetCoreServer |
-|---|---|---|
-| **Throughput** | 342 MiB/s | 73 MiB/s |
-| **Messages/sec** | 11,205,120 | 2,386,789 |
-| **Latency** | 89 ns | 418 ns |
+### Latency — measured round-trips, pipeline depth 1
 
-### WebSocket Echo
+Every message is timed individually with `Stopwatch.GetTimestamp`, and the next one is not sent until
+the echo comes back.
 
-| Metric | StormSocket | NetCoreServer |
-|---|---|---|
-| **Throughput** | 66 MiB/s | 40 MiB/s |
-| **Messages/sec** | 2,163,373 | 1,309,842 |
-| **Latency** | 462 ns | 763 ns |
-
-> Results will vary by hardware. Benchmark projects under `benchmark/` — run them yourself.
+| Echo round-trip, 32-byte messages | p50 | p90 | p99 | p99.9 |
+|---|---|---|---|---|
+| TCP, 1 connection | 46 us | 64 us | 81 us | 93 us |
+| TCP, 50 connections | 282 us | 344 us | 606 us | 1.6 ms |
+| WebSocket, 1 connection | 46 us | 64 us | 81 us | 95 us |
+| WebSocket, 50 connections | 276 us | 329 us | 505 us | 982 us |
 
 ```bash
 dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoServer
+dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoClient -- -c 50 -s 32 -z 10 --mode latency
+```
+
+### Throughput — saturation, deep pipeline
+
+100 connections each keeping a 1000-message send window full (~100k messages in flight). This is a
+saturation figure: it says how much the server moves, not how long a message takes.
+
+| Echo, 32-byte messages | Data throughput |
+|---|---|
+| TCP | 1.03 GiB/s |
+| WebSocket | ~76 MiB/s |
+
+```bash
 dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoClient -- -c 100 -m 1000 -s 32 -z 10
 ```
+
+### Conformance
+
+The [Autobahn Testsuite](https://github.com/crossbario/autobahn-testsuite) is the reference suite for
+RFC 6455: it throws malformed frames, truncated UTF-8, reserved close codes and hostile handshakes at
+a server and judges both the reply and the close.
+
+| Suite | Result |
+|---|---|
+| Correctness (sections 1-8, 10) | **247 / 247** |
+| permessage-deflate (12, 13) | 180 / 216, plus 36 reported `UNIMPLEMENTED` |
+
+The `UNIMPLEMENTED` cases ask the server to compress with a smaller LZ77 window. `DeflateStream`
+exposes no window-size control, so those offers are declined rather than accepted and quietly
+ignored, which is what RFC 7692 Section 7.1.2.2 asks for. Both suites run in CI on every push
+(`.github/workflows/autobahn.yml`) and the full report is published as a build artifact.
+
+```bash
+dotnet run -c Release --project benchmark/autobahn/AutobahnEchoServer 9001
+docker run --rm -v "$PWD/benchmark/autobahn:/config" -v "$PWD/benchmark/autobahn/reports:/reports" \
+  crossbario/autobahn-testsuite wstest --mode fuzzingclient --spec /config/fuzzingclient.json
+```
+
+### Frame decoding
+
+Decode path in isolation, no sockets involved — this is where the WebSocket layer's own cost lives
+(best of five runs, per frame):
+
+| Payload | v4.0.1 | v5.0.0 |
+|---|---|---|
+| 32 B | 51 ns | 58 ns |
+| 128 B | 104 ns | 60 ns |
+| 1 KB | 586 ns | 109 ns |
+| 8 KB | 4.42 us | 486 ns |
+
+Unmasking is vectorized in 5.0, which is what moves the larger payloads. The 32-byte row goes the
+other way: that is the protocol validation added in 5.0 (masking, close codes, UTF-8, frame limits),
+and it is a trade this project is willing to make. Allocation per message on the server dropped from
+156 to 109 bytes over a 25M-message run, and gen0 collections from 46 to 28.
+
+> No comparison against other libraries is published here. A fair one needs the competing harness
+> committed next to ours, pinned versions and disclosed hardware; until that exists, numbers you
+> cannot reproduce are not worth printing.
 
 # Documentation
 
@@ -308,6 +371,7 @@ dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoClient --
 | [Configuration](docs/configuration.md) | All options tables (ServerOptions, WebSocketOptions, ClientOptions, etc.) |
 | [API Reference](docs/api-reference.md) | ISession, IWebSocketSession, clients, middleware, framers |
 | [Architecture](docs/architecture.md) | Connection lifecycle, write serialization, backpressure internals |
+| [Changelog](CHANGELOG.md) | Release notes, and the breaking changes in 5.0 |
 
 # Building
 

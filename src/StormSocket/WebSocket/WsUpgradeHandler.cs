@@ -12,10 +12,15 @@ public static class WsUpgradeHandler
 {
     private static readonly byte[] CrLfCrLf = "\r\n\r\n"u8.ToArray();
     private const string WsGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    private const int DefaultMaxRequestHeaderBytes = 16 * 1024;
+    private const int DefaultMaxRequestHeaderCount = 100;
+    private const int WsKeyDecodedLength = 16;
+    private const int WsKeyBase64Length = 24;
 
     /// <summary>
     /// Parses and validates a WebSocket upgrade request per RFC 6455 4.2.1.
-    /// Validates: Upgrade, Connection, Sec-WebSocket-Version, Sec-WebSocket-Key, and optionally Origin headers.
+    /// Validates: request line, Host, Upgrade, Connection, Sec-WebSocket-Version, Sec-WebSocket-Key,
+    /// and optionally Origin headers.
     /// </summary>
     /// <param name="buffer">The request buffer.</param>
     /// <param name="wsKey">The extracted Sec-WebSocket-Key.</param>
@@ -25,123 +30,17 @@ public static class WsUpgradeHandler
         out string? wsKey,
         IReadOnlyList<string>? allowedOrigins = null)
     {
-        wsKey = null;
+        int scanOffset = 0;
+        WsUpgradeResult result = TryParseUpgradeRequest(
+            ref buffer,
+            ref scanOffset,
+            out WsUpgradeContext? context,
+            out _,
+            remoteEndPoint: null,
+            allowedOrigins);
 
-        Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
-
-        ReadOnlySpan<byte> headerBytes;
-        SequencePosition consumed;
-
-        if (buffer.IsSingleSegment)
-        {
-            ReadOnlySpan<byte> span = buffer.FirstSpan;
-
-            int idx = IndexOf(span, headerEndSpan);
-            if (idx < 0)
-            {
-                return WsUpgradeResult.Incomplete;
-            }
-
-            headerBytes = span.Slice(0, idx);
-            consumed = buffer.GetPosition(idx + 4);
-        }
-        else
-        {
-            byte[] arr = buffer.ToArray();
-
-            int idx = IndexOf(arr.AsSpan(), headerEndSpan);
-            if (idx < 0)
-            {
-                return WsUpgradeResult.Incomplete;
-            }
-
-            headerBytes = arr.AsSpan(0, idx);
-            consumed = buffer.GetPosition(idx + 4);
-        }
-
-        string headerStr = Encoding.ASCII.GetString(headerBytes);
-        string[] lines = headerStr.Split("\r\n");
-
-        bool hasUpgrade = false;
-        bool hasConnection = false;
-        bool hasValidVersion = false;
-        string? key = null;
-        string? origin = null;
-
-        foreach (string line in lines)
-        {
-            if (line.StartsWith("Upgrade:", StringComparison.OrdinalIgnoreCase))
-            {
-                string value = line.Substring("Upgrade:".Length).Trim();
-                hasUpgrade = value.Equals("websocket", StringComparison.OrdinalIgnoreCase);
-            }
-            else if (line.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase))
-            {
-                string value = line.Substring("Connection:".Length).Trim();
-                hasConnection = value.Contains("Upgrade", StringComparison.OrdinalIgnoreCase);
-            }
-            else if (line.StartsWith("Sec-WebSocket-Version:", StringComparison.OrdinalIgnoreCase))
-            {
-                string value = line.Substring("Sec-WebSocket-Version:".Length).Trim();
-                hasValidVersion = value == "13";
-            }
-            else if (line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
-            {
-                key = line.Substring("Sec-WebSocket-Key:".Length).Trim();
-            }
-            else if (line.StartsWith("Origin:", StringComparison.OrdinalIgnoreCase))
-            {
-                origin = line.Substring("Origin:".Length).Trim();
-            }
-        }
-
-        if (!hasUpgrade)
-        {
-            buffer = buffer.Slice(consumed);
-            return WsUpgradeResult.MissingUpgradeHeader;
-        }
-
-        if (!hasConnection)
-        {
-            buffer = buffer.Slice(consumed);
-            return WsUpgradeResult.MissingConnectionHeader;
-        }
-
-        if (!hasValidVersion)
-        {
-            buffer = buffer.Slice(consumed);
-            return WsUpgradeResult.InvalidVersion;
-        }
-
-        if (string.IsNullOrEmpty(key))
-        {
-            buffer = buffer.Slice(consumed);
-            return WsUpgradeResult.MissingKey;
-        }
-
-        // RFC 6455 10.2: Origin validation for CSWSH protection
-        if (allowedOrigins is { Count: > 0 })
-        {
-            bool originAllowed = false;
-            foreach (string allowed in allowedOrigins)
-            {
-                if (string.Equals(origin, allowed, StringComparison.OrdinalIgnoreCase))
-                {
-                    originAllowed = true;
-                    break;
-                }
-            }
-
-            if (!originAllowed)
-            {
-                buffer = buffer.Slice(consumed);
-                return WsUpgradeResult.ForbiddenOrigin;
-            }
-        }
-
-        wsKey = key;
-        buffer = buffer.Slice(consumed);
-        return WsUpgradeResult.Success;
+        wsKey = context?.WsKey;
+        return result;
     }
 
     /// <summary>
@@ -154,130 +53,203 @@ public static class WsUpgradeHandler
         EndPoint? remoteEndPoint,
         IReadOnlyList<string>? allowedOrigins = null)
     {
+        int scanOffset = 0;
+        return TryParseUpgradeRequest(
+            ref buffer,
+            ref scanOffset,
+            out context,
+            out _,
+            remoteEndPoint,
+            allowedOrigins);
+    }
+
+    /// <summary>
+    /// Parses a WebSocket upgrade request, enforcing limits on the size and number of request headers
+    /// and resuming the search for the end of the header block where the previous read left off.
+    /// </summary>
+    /// <param name="buffer">
+    /// The bytes received so far. Sliced past the request once the handshake has been parsed; left
+    /// untouched while the request is still incomplete.
+    /// </param>
+    /// <param name="scanOffset">
+    /// How many bytes of <paramref name="buffer"/> have already been searched for the end of the header
+    /// block. Initialize to 0 before the first read and pass the same variable on every subsequent read
+    /// of the same connection so a partial request is not rescanned from the start each time.
+    /// </param>
+    /// <param name="context">The parsed request context; null unless the result is <see cref="WsUpgradeResult.Success"/>.</param>
+    /// <param name="errorResponse">
+    /// The HTTP response to write before closing the connection, or null when the result is
+    /// <see cref="WsUpgradeResult.Success"/> or <see cref="WsUpgradeResult.Incomplete"/>. It carries the
+    /// precise status (431, 426, 403, 400) for failures that <see cref="WsUpgradeResult"/> cannot express.
+    /// </param>
+    /// <param name="remoteEndPoint">The remote endpoint of the connecting client.</param>
+    /// <param name="allowedOrigins">Optional list of allowed origins for CSWSH protection (RFC 6455 10.2).</param>
+    /// <param name="maxRequestHeaderBytes">Maximum size of the request line plus headers; larger requests are answered with 431.</param>
+    /// <param name="maxRequestHeaderCount">Maximum number of header fields; requests with more are answered with 400.</param>
+    public static WsUpgradeResult TryParseUpgradeRequest(
+        ref ReadOnlySequence<byte> buffer,
+        ref int scanOffset,
+        out WsUpgradeContext? context,
+        out byte[]? errorResponse,
+        EndPoint? remoteEndPoint,
+        IReadOnlyList<string>? allowedOrigins = null,
+        int maxRequestHeaderBytes = DefaultMaxRequestHeaderBytes,
+        int maxRequestHeaderCount = DefaultMaxRequestHeaderCount)
+    {
+        context = null;
+        errorResponse = null;
+
+        // Only the first maxRequestHeaderBytes are searched: the rest of the buffer may already hold
+        // WebSocket frames the client pipelined behind a perfectly small handshake.
+        long searchLimit = Math.Min(buffer.Length, maxRequestHeaderBytes);
+        long resumeAt = scanOffset > CrLfCrLf.Length - 1 ? scanOffset - (CrLfCrLf.Length - 1) : 0;
+        if (resumeAt > searchLimit)
+        {
+            resumeAt = searchLimit;
+        }
+
+        SequenceReader<byte> reader = new SequenceReader<byte>(buffer.Slice(resumeAt, searchLimit - resumeAt));
+
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> beforeTerminator, CrLfCrLf))
+        {
+            scanOffset = (int)searchLimit;
+
+            if (buffer.Length < maxRequestHeaderBytes)
+            {
+                return WsUpgradeResult.Incomplete;
+            }
+
+            // A client that never sends the end of the header block would otherwise make the server
+            // buffer and rescan without bound, which costs the server far more than it costs the client.
+            errorResponse = BuildStatusResponse(431, "Request Header Fields Too Large", "Request header fields too large");
+            return WsUpgradeResult.MissingUpgradeHeader;
+        }
+
+        long headerBlockLength = resumeAt + beforeTerminator.Length;
+        SequencePosition consumed = buffer.GetPosition(headerBlockLength + CrLfCrLf.Length);
+        string headerBlock = DecodeAscii(buffer.Slice(0, headerBlockLength));
+
+        WsUpgradeResult result = ValidateRequest(
+            headerBlock,
+            remoteEndPoint,
+            allowedOrigins,
+            maxRequestHeaderCount,
+            out context,
+            out errorResponse);
+
+        buffer = buffer.Slice(consumed);
+        return result;
+    }
+
+    private static WsUpgradeResult ValidateRequest(
+        string headerBlock,
+        EndPoint? remoteEndPoint,
+        IReadOnlyList<string>? allowedOrigins,
+        int maxRequestHeaderCount,
+        out WsUpgradeContext? context,
+        out byte[]? errorResponse)
+    {
         context = null;
 
-        Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
+        string[] lines = headerBlock.Split("\r\n");
 
-        ReadOnlySpan<byte> headerBytes;
-        SequencePosition consumed;
-
-        if (buffer.IsSingleSegment)
+        // RFC 6455 4.2.1: the request must be a GET on HTTP/1.1 or higher.
+        string[] requestLine = lines[0].Split(' ');
+        if (requestLine.Length is not 3
+            || !requestLine[0].Equals("GET", StringComparison.Ordinal)
+            || !IsSupportedHttpVersion(requestLine[2])
+            || ContainsControlCharacter(lines[0].AsSpan()))
         {
-            ReadOnlySpan<byte> span = buffer.FirstSpan;
-
-            int idx = IndexOf(span, headerEndSpan);
-            if (idx < 0)
-            {
-                return WsUpgradeResult.Incomplete;
-            }
-
-            headerBytes = span.Slice(0, idx);
-            consumed = buffer.GetPosition(idx + 4);
-        }
-        else
-        {
-            byte[] arr = buffer.ToArray();
-
-            int idx = IndexOf(arr.AsSpan(), headerEndSpan);
-            if (idx < 0)
-            {
-                return WsUpgradeResult.Incomplete;
-            }
-
-            headerBytes = arr.AsSpan(0, idx);
-            consumed = buffer.GetPosition(idx + 4);
+            errorResponse = BuildStatusResponse(400, "Bad Request", "Malformed WebSocket upgrade request line");
+            return WsUpgradeResult.MissingUpgradeHeader;
         }
 
-        string headerStr = Encoding.ASCII.GetString(headerBytes);
-        string[] lines = headerStr.Split("\r\n");
+        if (lines.Length - 1 > maxRequestHeaderCount)
+        {
+            errorResponse = BuildStatusResponse(400, "Bad Request", "Too many request header fields");
+            return WsUpgradeResult.MissingUpgradeHeader;
+        }
 
-        string path = "/";
+        string path = requestLine[1];
         string? queryString = null;
-
-        if (lines.Length > 0)
+        int queryIndex = path.IndexOf('?');
+        if (queryIndex >= 0)
         {
-            string[] requestLine = lines[0].Split(' ');
-            if (requestLine.Length >= 2)
-            {
-                string fullPath = requestLine[1];
-                int queryIndex = fullPath.IndexOf('?');
-                if (queryIndex >= 0)
-                {
-                    path = fullPath[..queryIndex];
-                    queryString = fullPath[(queryIndex + 1)..];
-                }
-                else
-                {
-                    path = fullPath;
-                }
-            }
+            queryString = path[(queryIndex + 1)..];
+            path = path[..queryIndex];
         }
 
         Dictionary<string, string> headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        bool hasUpgrade = false;
-        bool hasConnection = false;
-        bool hasValidVersion = false;
-        string? key = null;
-        string? origin = null;
 
         for (int i = 1; i < lines.Length; i++)
         {
             string line = lines[i];
             int colonIndex = line.IndexOf(':');
-            if (colonIndex <= 0) continue;
 
-            string headerName = line[..colonIndex].Trim();
+            // RFC 7230 3.2.4: no whitespace is allowed before the colon, and a bare CR or LF inside a
+            // field value would let the client smuggle an extra header into the 101 response we echo.
+            if (colonIndex <= 0 || !IsToken(line.AsSpan(0, colonIndex)) || ContainsControlCharacter(line.AsSpan(colonIndex + 1)))
+            {
+                errorResponse = BuildStatusResponse(400, "Bad Request", "Malformed request header field");
+                return WsUpgradeResult.MissingUpgradeHeader;
+            }
+
+            string headerName = line[..colonIndex];
             string headerValue = line[(colonIndex + 1)..].Trim();
-            headers[headerName] = headerValue;
 
-            if (headerName.Equals("Upgrade", StringComparison.OrdinalIgnoreCase))
+            if (headers.TryGetValue(headerName, out string? existingValue))
             {
-                hasUpgrade = headerValue.Equals("websocket", StringComparison.OrdinalIgnoreCase);
+                // RFC 6455 4.2.1 and RFC 7230 5.4 allow exactly one of these; accepting the last one
+                // lets a client hide a second handshake behind the one an intermediary validated.
+                if (IsSingleValueHeader(headerName))
+                {
+                    errorResponse = BuildStatusResponse(400, "Bad Request", $"Duplicate {headerName} header");
+                    return WsUpgradeResult.MissingUpgradeHeader;
+                }
+
+                headers[headerName] = existingValue.Length is 0 ? headerValue : $"{existingValue}, {headerValue}";
             }
-            else if (headerName.Equals("Connection", StringComparison.OrdinalIgnoreCase))
+            else
             {
-                hasConnection = headerValue.Contains("Upgrade", StringComparison.OrdinalIgnoreCase);
-            }
-            else if (headerName.Equals("Sec-WebSocket-Version", StringComparison.OrdinalIgnoreCase))
-            {
-                hasValidVersion = headerValue == "13";
-            }
-            else if (headerName.Equals("Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
-            {
-                key = headerValue;
-            }
-            else if (headerName.Equals("Origin", StringComparison.OrdinalIgnoreCase))
-            {
-                origin = headerValue;
+                headers[headerName] = headerValue;
             }
         }
 
-        if (!hasUpgrade)
+        if (!headers.TryGetValue("Host", out string? host) || host.Length is 0)
         {
-            buffer = buffer.Slice(consumed);
+            errorResponse = BuildStatusResponse(400, "Bad Request", "Missing Host header");
             return WsUpgradeResult.MissingUpgradeHeader;
         }
 
-        if (!hasConnection)
+        if (!headers.TryGetValue("Upgrade", out string? upgrade) || !ContainsToken(upgrade, "websocket"))
         {
-            buffer = buffer.Slice(consumed);
+            errorResponse = BuildErrorResponse(WsUpgradeResult.MissingUpgradeHeader);
+            return WsUpgradeResult.MissingUpgradeHeader;
+        }
+
+        if (!headers.TryGetValue("Connection", out string? connection) || !ContainsToken(connection, "Upgrade"))
+        {
+            errorResponse = BuildErrorResponse(WsUpgradeResult.MissingConnectionHeader);
             return WsUpgradeResult.MissingConnectionHeader;
         }
 
-        if (!hasValidVersion)
+        if (!headers.TryGetValue("Sec-WebSocket-Version", out string? version) || version is not "13")
         {
-            buffer = buffer.Slice(consumed);
+            errorResponse = BuildErrorResponse(WsUpgradeResult.InvalidVersion);
             return WsUpgradeResult.InvalidVersion;
         }
 
-        if (string.IsNullOrEmpty(key))
+        if (!headers.TryGetValue("Sec-WebSocket-Key", out string? key) || !IsValidWebSocketKey(key))
         {
-            buffer = buffer.Slice(consumed);
+            errorResponse = BuildErrorResponse(WsUpgradeResult.MissingKey);
             return WsUpgradeResult.MissingKey;
         }
 
+        // RFC 6455 10.2: Origin validation for CSWSH protection
         if (allowedOrigins is { Count: > 0 })
         {
+            headers.TryGetValue("Origin", out string? origin);
+
             bool originAllowed = false;
             foreach (string allowed in allowedOrigins)
             {
@@ -290,18 +262,30 @@ public static class WsUpgradeHandler
 
             if (!originAllowed)
             {
-                buffer = buffer.Slice(consumed);
+                errorResponse = BuildErrorResponse(WsUpgradeResult.ForbiddenOrigin);
                 return WsUpgradeResult.ForbiddenOrigin;
             }
         }
 
         context = new WsUpgradeContext(path, queryString, headers, key, remoteEndPoint);
-        buffer = buffer.Slice(consumed);
+        errorResponse = null;
         return WsUpgradeResult.Success;
     }
 
     public static byte[] BuildUpgradeResponse(string wsKey, string? extensionResponse = null, string? subprotocol = null)
     {
+        // Both values end up as header values in the 101 response, so anything that could terminate a
+        // header line early must never reach the wire (RFC 7230 3.2.4).
+        if (extensionResponse is not null && ContainsControlCharacter(extensionResponse.AsSpan()))
+        {
+            throw new ArgumentException("Extension response contains control characters.", nameof(extensionResponse));
+        }
+
+        if (subprotocol is not null && !IsToken(subprotocol.AsSpan()))
+        {
+            throw new ArgumentException("Subprotocol is not a valid RFC 6455 token.", nameof(subprotocol));
+        }
+
         string acceptKey = ComputeAcceptKey(wsKey);
         string extensionHeader = extensionResponse is not null
             ? $"Sec-WebSocket-Extensions: {extensionResponse}\r\n"
@@ -316,31 +300,22 @@ public static class WsUpgradeHandler
     /// <summary>
     /// Builds an appropriate HTTP error response for invalid upgrade requests.
     /// </summary>
-    public static byte[] BuildErrorResponse(WsUpgradeResult error)
+    public static byte[] BuildErrorResponse(WsUpgradeResult error) => error switch
     {
-        if (error == WsUpgradeResult.ForbiddenOrigin)
-        {
-            const string reason = "Origin not allowed";
-            string response = $"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
-            return Encoding.ASCII.GetBytes(response);
-        }
+        WsUpgradeResult.ForbiddenOrigin => BuildStatusResponse(403, "Forbidden", "Origin not allowed"),
 
-        string errorReason = error switch
-        {
-            WsUpgradeResult.MissingUpgradeHeader => "Missing or invalid Upgrade header",
-            WsUpgradeResult.MissingConnectionHeader => "Missing or invalid Connection header",
-            WsUpgradeResult.MissingKey => "Missing Sec-WebSocket-Key header",
-            WsUpgradeResult.InvalidVersion => "Unsupported WebSocket version",
-            _ => "Bad Request",
-        };
+        // RFC 6455 4.4: a version the server cannot speak is answered with 426 plus the version it can.
+        WsUpgradeResult.InvalidVersion => BuildStatusResponse(
+            426,
+            "Upgrade Required",
+            "Unsupported WebSocket version",
+            "Sec-WebSocket-Version: 13\r\n"),
 
-        string versionHeader = error == WsUpgradeResult.InvalidVersion
-            ? "Sec-WebSocket-Version: 13\r\n"
-            : "";
-
-        string errorResponse = $"HTTP/1.1 400 Bad Request\r\n{versionHeader}Content-Type: text/plain\r\nContent-Length: {errorReason.Length}\r\nConnection: close\r\n\r\n{errorReason}";
-        return Encoding.ASCII.GetBytes(errorResponse);
-    }
+        WsUpgradeResult.MissingUpgradeHeader => BuildStatusResponse(400, "Bad Request", "Missing or invalid Upgrade header"),
+        WsUpgradeResult.MissingConnectionHeader => BuildStatusResponse(400, "Bad Request", "Missing or invalid Connection header"),
+        WsUpgradeResult.MissingKey => BuildStatusResponse(400, "Bad Request", "Missing or invalid Sec-WebSocket-Key header"),
+        _ => BuildStatusResponse(400, "Bad Request", "Bad Request"),
+    };
 
     /// <summary>
     /// Builds a custom HTTP error response for rejected upgrade requests.
@@ -353,12 +328,21 @@ public static class WsUpgradeHandler
             401 => "Unauthorized",
             403 => "Forbidden",
             404 => "Not Found",
+            426 => "Upgrade Required",
             429 => "Too Many Requests",
+            431 => "Request Header Fields Too Large",
             _ => "Error",
         };
 
-        reason ??= statusText;
-        string response = $"HTTP/1.1 {statusCode} {statusText}\r\nContent-Type: text/plain\r\nContent-Length: {reason.Length}\r\nConnection: close\r\n\r\n{reason}";
+        return BuildStatusResponse(statusCode, statusText, reason ?? statusText);
+    }
+
+    private static byte[] BuildStatusResponse(int statusCode, string statusText, string reason, string? extraHeaders = null)
+    {
+        // The reason is application supplied and is measured by Content-Length, so control characters
+        // are stripped rather than allowed to desynchronize the response.
+        string body = SanitizeReason(reason);
+        string response = $"HTTP/1.1 {statusCode} {statusText}\r\n{extraHeaders}Content-Type: text/plain\r\nContent-Length: {Encoding.ASCII.GetByteCount(body)}\r\nConnection: close\r\n\r\n{body}";
         return Encoding.ASCII.GetBytes(response);
     }
 
@@ -375,7 +359,7 @@ public static class WsUpgradeHandler
     /// </summary>
     public static (byte[] Request, string WsKey) BuildUpgradeRequest(Uri uri, IReadOnlyDictionary<string, string>? additionalHeaders = null, string? extensionOffer = null, IReadOnlyList<string>? subprotocols = null)
     {
-        byte[] nonce = new byte[16];
+        byte[] nonce = new byte[WsKeyDecodedLength];
         RandomNumberGenerator.Fill(nonce);
         string wsKey = Convert.ToBase64String(nonce);
 
@@ -429,45 +413,44 @@ public static class WsUpgradeHandler
     }
 
     public static bool TryParseUpgradeResponse(ref ReadOnlySequence<byte> buffer, string expectedWsKey, out string? extensions, out string? subprotocol)
+        => ParseUpgradeResponse(ref buffer, expectedWsKey, out extensions, out subprotocol, out _) == WsUpgradeResponseState.Accepted;
+
+    /// <summary>
+    /// Parses the server's handshake response, distinguishing "not all of it has arrived yet" from
+    /// "it arrived and the server said no".
+    /// </summary>
+    /// <remarks>
+    /// A plain bool cannot tell those apart, which leaves a client waiting for more bytes that will
+    /// never come after a rejection — until its connect timeout fires, turning a clear 401 into a
+    /// timeout several seconds later.
+    /// </remarks>
+    /// <param name="statusLine">The response's status line, available whenever the headers were complete.</param>
+    internal static WsUpgradeResponseState ParseUpgradeResponse(
+        ref ReadOnlySequence<byte> buffer,
+        string expectedWsKey,
+        out string? extensions,
+        out string? subprotocol,
+        out string? statusLine)
     {
         extensions = null;
         subprotocol = null;
-        Span<byte> headerEndSpan = CrLfCrLf.AsSpan();
+        statusLine = null;
 
-        ReadOnlySpan<byte> headerBytes;
-        int endIdx;
-
-        if (buffer.IsSingleSegment)
+        SequenceReader<byte> reader = new SequenceReader<byte>(buffer);
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> beforeTerminator, CrLfCrLf))
         {
-            ReadOnlySpan<byte> span = buffer.FirstSpan;
-            endIdx = IndexOf(span, headerEndSpan);
-            if (endIdx < 0)
-            {
-                return false;
-            }
-
-            headerBytes = span.Slice(0, endIdx);
-        }
-        else
-        {
-            byte[] arr = buffer.ToArray();
-            endIdx = IndexOf(arr.AsSpan(), headerEndSpan);
-            if (endIdx < 0)
-            {
-                return false;
-            }
-
-            headerBytes = arr.AsSpan(0, endIdx);
+            return WsUpgradeResponseState.Incomplete;
         }
 
-        buffer = buffer.Slice(endIdx + 4);
+        string headerStr = DecodeAscii(beforeTerminator);
+        buffer = buffer.Slice(reader.Position);
 
-        string headerStr = Encoding.ASCII.GetString(headerBytes);
         string[] lines = headerStr.Split("\r\n");
+        statusLine = lines.Length > 0 ? lines[0] : null;
 
-        if (lines.Length == 0 || !lines[0].StartsWith("HTTP/1.1 101", StringComparison.Ordinal))
+        if (lines.Length is 0 || !lines[0].StartsWith("HTTP/1.1 101", StringComparison.Ordinal))
         {
-            return false;
+            return WsUpgradeResponseState.Rejected;
         }
 
         string expectedAccept = ComputeAcceptKey(expectedWsKey);
@@ -489,18 +472,130 @@ public static class WsUpgradeHandler
             }
         }
 
-        return acceptValid;
+        return acceptValid ? WsUpgradeResponseState.Accepted : WsUpgradeResponseState.InvalidAcceptKey;
     }
 
-    private static int IndexOf(ReadOnlySpan<byte> source, ReadOnlySpan<byte> pattern)
+    private static string DecodeAscii(in ReadOnlySequence<byte> sequence)
     {
-        for (int i = 0; i <= source.Length - pattern.Length; i++)
+        if (sequence.IsSingleSegment)
         {
-            if (source.Slice(i, pattern.Length).SequenceEqual(pattern))
+            return Encoding.ASCII.GetString(sequence.FirstSpan);
+        }
+
+        int length = (int)sequence.Length;
+        byte[] rented = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            sequence.CopyTo(rented);
+            return Encoding.ASCII.GetString(rented, 0, length);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static bool IsSupportedHttpVersion(string version)
+    {
+        if (!version.StartsWith("HTTP/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int dotIndex = version.IndexOf('.', "HTTP/".Length);
+        if (dotIndex < 0
+            || !int.TryParse(version.AsSpan("HTTP/".Length, dotIndex - "HTTP/".Length), out int major)
+            || !int.TryParse(version.AsSpan(dotIndex + 1), out int minor))
+        {
+            return false;
+        }
+
+        return major > 1 || (major is 1 && minor >= 1);
+    }
+
+    private static bool IsValidWebSocketKey(string key)
+    {
+        if (key.Length is not WsKeyBase64Length)
+        {
+            return false;
+        }
+
+        Span<byte> decoded = stackalloc byte[WsKeyDecodedLength];
+        return Convert.TryFromBase64String(key, decoded, out int written) && written is WsKeyDecodedLength;
+    }
+
+    private static bool IsSingleValueHeader(string headerName) =>
+        headerName.Equals("Host", StringComparison.OrdinalIgnoreCase)
+        || headerName.Equals("Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase)
+        || headerName.Equals("Sec-WebSocket-Version", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Tests whether a comma-separated header value carries <paramref name="token"/> as one of its
+    /// elements. Substring matching would accept values such as "not-websocket".
+    /// </summary>
+    private static bool ContainsToken(string headerValue, string token)
+    {
+        foreach (string element in headerValue.Split(',', StringSplitOptions.TrimEntries))
+        {
+            if (element.Equals(token, StringComparison.OrdinalIgnoreCase))
             {
-                return i;
+                return true;
             }
         }
-        return -1;
+
+        return false;
+    }
+
+    internal static bool IsToken(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (char c in value)
+        {
+            bool isTokenChar = c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9'
+                or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~';
+
+            if (!isTokenChar)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ContainsControlCharacter(ReadOnlySpan<char> value)
+    {
+        foreach (char c in value)
+        {
+            if ((c < ' ' && c is not '\t') || c is (char)0x7F)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string SanitizeReason(string reason)
+    {
+        if (!ContainsControlCharacter(reason.AsSpan()))
+        {
+            return reason;
+        }
+
+        char[] sanitized = reason.ToCharArray();
+        for (int i = 0; i < sanitized.Length; i++)
+        {
+            if (sanitized[i] < ' ' || sanitized[i] is (char)0x7F)
+            {
+                sanitized[i] = ' ';
+            }
+        }
+
+        return new string(sanitized);
     }
 }

@@ -1,0 +1,19 @@
+{
+  "outdir": "/reports/servers",
+  "servers": [
+    {
+      "agent": "StormSocket",
+      "url": "ws://host.docker.internal:9001"
+    }
+  ],
+  "cases": [
+    "*"
+  ],
+  "__comment": "Protocol correctness: framing, ping/pong, reserved bits, opcodes, fragmentation, UTF-8 and close handling. Section 9 is a throughput sweep that measures the machine, and 12/13 are the compression sections, which run as a separate job so this one stays a fast signal.",
+  "exclude-cases": [
+    "9.*",
+    "12.*",
+    "13.*"
+  ],
+  "exclude-agent-cases": {}
+}

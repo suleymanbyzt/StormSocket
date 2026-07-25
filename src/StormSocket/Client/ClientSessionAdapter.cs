@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using StormSocket.Core;
 using StormSocket.Session;
@@ -54,7 +55,6 @@ internal sealed class ClientSessionAdapter : ISession
         if (_tcpClient is not null)
         {
             await _tcpClient.DisconnectAsync(cancellationToken).ConfigureAwait(false);
-            
         }
         else if (_wsClient is not null)
         {
@@ -68,7 +68,12 @@ internal sealed class ClientSessionAdapter : ISession
 
     public void LeaveGroup(string group) { }
 
-    public IDictionary<string, object?> Items { get; } = new Dictionary<string, object?>();
+    /// <remarks>
+    /// Concurrent by design: one adapter lives for the whole connection, so the receive loop and
+    /// application threads reach it at the same time, and a plain Dictionary corrupts its buckets
+    /// under concurrent writes.
+    /// </remarks>
+    public IDictionary<string, object?> Items { get; } = new ConcurrentDictionary<string, object?>();
 
     public T? Get<T>(SessionKey<T> key)
     {

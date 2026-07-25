@@ -110,11 +110,11 @@ public class WsUpgradeTests
     [Fact]
     public void BuildErrorResponse_InvalidVersion_IncludesVersionHeader()
     {
-        // RFC 6455 4.4: Server MUST respond with Sec-WebSocket-Version header
+        // RFC 6455 4.4: the server SHOULD answer 426 and MUST advertise the version it speaks
         byte[] response = WsUpgradeHandler.BuildErrorResponse(WsUpgradeResult.InvalidVersion);
         string responseStr = Encoding.ASCII.GetString(response);
 
-        Assert.StartsWith("HTTP/1.1 400 Bad Request", responseStr);
+        Assert.StartsWith("HTTP/1.1 426 Upgrade Required", responseStr);
         Assert.Contains("Sec-WebSocket-Version: 13", responseStr);
     }
 
