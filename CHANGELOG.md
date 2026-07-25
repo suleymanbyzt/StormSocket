@@ -10,6 +10,16 @@ A correctness and hardening release. The WebSocket layer framed and routed messa
 never validated them, so peers could drive the server outside the protocol; several of those paths
 were remotely reachable. Every change below is covered by a regression test.
 
+### Conformance
+
+- The Autobahn Testsuite now runs in CI. The correctness sections pass **247/247**; the
+  permessage-deflate sections pass 180/216 with 36 cases reported `UNIMPLEMENTED`, which is the
+  window-size parameter this library declines rather than accepts and ignores.
+- Running it caught two defects no unit test had: a **zero-length message was never delivered to the
+  application** (the middleware hook's "empty means suppressed" convention could not tell an empty
+  payload from a suppressed one), and a connection failed by the server **waited for a Close frame it
+  could no longer read**, so the socket lingered and peers reported the close as failed.
+
 ### Security
 
 - **permessage-deflate decompression is now bounded.** `Decompress` inflated into an unbounded

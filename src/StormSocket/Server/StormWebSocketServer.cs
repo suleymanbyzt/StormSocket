@@ -738,10 +738,16 @@ public class StormWebSocketServer : IAsyncDisposable
         session.Metrics.AddBytesReceived(msg.Data.Length);
         Metrics.RecordMessageReceived(msg.Data.Length);
 
-        ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
-        if (processed.IsEmpty)
+        // An empty result means a middleware suppressed the message — but a zero-length message is
+        // legal in RFC 6455 and must still reach the application, so the two are told apart by
+        // whether there was anything to suppress in the first place.
+        if (_pipeline.HasMiddleware)
         {
-            return;
+            ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, msg.Data).ConfigureAwait(false);
+            if (processed.IsEmpty && !msg.Data.IsEmpty)
+            {
+                return;
+            }
         }
 
         foreach (WsMessageReceivedHandler handler in _onMessageReceived.Handlers)

@@ -566,7 +566,10 @@ public sealed class WebSocketSession : IWebSocketSession
 
     public async ValueTask DisposeAsync()
     {
-        await CloseAsync().ConfigureAwait(false);
+        // waitForPeer: false — by the time a session is disposed its read loop has ended, so a Close
+        // frame from the peer could no longer be observed. Waiting for one would only delay closing
+        // the socket, which the peer reads as a server that never completed the handshake.
+        await CloseAsync(WsCloseStatus.NormalClosure, waitForPeer: false).ConfigureAwait(false);
 
         if (_abortTask is not null)
         {

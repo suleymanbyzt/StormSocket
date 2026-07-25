@@ -117,6 +117,30 @@ public class WsProtocolComplianceTests
         }
     }
 
+    [Theory]
+    [InlineData(0x81)] // text
+    [InlineData(0x82)] // binary
+    public async Task ZeroLengthMessage_IsDeliveredToTheApplication(byte opCodeByte)
+    {
+        // A zero-length message is legal (RFC 6455 5.2) and used as a keepalive by real clients.
+        // It used to be swallowed by the middleware hook, whose "empty means suppressed" convention
+        // cannot tell an empty payload from a suppressed one.
+        (StormWebSocketServer server, int port) = await StartServerAsync();
+        await using StormWebSocketServer _ = server;
+
+        TaskCompletionSource<int> received = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.OnMessageReceived += (_, msg) =>
+        {
+            received.TrySetResult(msg.Data.Length);
+            return ValueTask.CompletedTask;
+        };
+
+        using NetworkStream stream = await HandshakeAsync(port);
+        await stream.WriteAsync(MaskedFrame(opCodeByte, []));
+
+        Assert.Equal(0, await received.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
     [Fact]
     public async Task InvalidUtf8TextFrame_FailsConnectionWithInvalidPayload()
     {

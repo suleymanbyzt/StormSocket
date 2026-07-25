@@ -37,7 +37,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 
 - **Event-based API** - no subclassing, just `server.OnDataReceived += handler`
 - **TCP Server & Client** with optional message framing (raw, length-prefix, delimiter)
-- **WebSocket Server & Client** built to RFC 6455 — and it *validates* the protocol rather than only speaking it: masking enforced in both directions, incremental UTF-8 validation across fragments (1007), close-code and close-reason validation (1002/1007), single close frame with a proper closing handshake, control-frame and frame-length rules, strict handshake validation
+- **WebSocket Server & Client** built to RFC 6455, **247/247 Autobahn Testsuite conformance cases passing** — it *validates* the protocol rather than only speaking it: masking enforced in both directions, incremental UTF-8 validation across fragments (1007), close-code and close-reason validation (1002/1007), single close frame with a proper closing handshake, control-frame and frame-length rules, strict handshake validation
 - **SSL/TLS** as a simple configuration option on any server or client
 - **Auto-reconnect** - clients automatically reconnect on disconnect with configurable delay and max attempts
 - **System.IO.Pipelines** — received payloads are handed to handlers without a copy where the protocol allows it, with backpressure that reaches the socket
@@ -315,6 +315,28 @@ saturation figure: it says how much the server moves, not how long a message tak
 
 ```bash
 dotnet run -c Release --project benchmark/StormSocket.Benchmark.TcpEchoClient -- -c 100 -m 1000 -s 32 -z 10
+```
+
+### Conformance
+
+The [Autobahn Testsuite](https://github.com/crossbario/autobahn-testsuite) is the reference suite for
+RFC 6455: it throws malformed frames, truncated UTF-8, reserved close codes and hostile handshakes at
+a server and judges both the reply and the close.
+
+| Suite | Result |
+|---|---|
+| Correctness (sections 1-8, 10) | **247 / 247** |
+| permessage-deflate (12, 13) | 180 / 216, plus 36 reported `UNIMPLEMENTED` |
+
+The `UNIMPLEMENTED` cases ask the server to compress with a smaller LZ77 window. `DeflateStream`
+exposes no window-size control, so those offers are declined rather than accepted and quietly
+ignored, which is what RFC 7692 Section 7.1.2.2 asks for. Both suites run in CI on every push
+(`.github/workflows/autobahn.yml`) and the full report is published as a build artifact.
+
+```bash
+dotnet run -c Release --project benchmark/autobahn/AutobahnEchoServer 9001
+docker run --rm -v "$PWD/benchmark/autobahn:/config" -v "$PWD/benchmark/autobahn/reports:/reports" \
+  crossbario/autobahn-testsuite wstest --mode fuzzingclient --spec /config/fuzzingclient.json
 ```
 
 ### Frame decoding
