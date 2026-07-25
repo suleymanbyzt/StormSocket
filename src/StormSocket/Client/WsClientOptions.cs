@@ -12,8 +12,18 @@ public sealed class WsClientOptions
     /// <summary>The WebSocket URI to connect to (ws:// or wss://).</summary>
     public Uri Uri { get; init; } = new("ws://localhost:8080");
 
-    /// <summary>Connection timeout. Default: 10 seconds.</summary>
+    /// <summary>
+    /// Budget for the whole connect sequence — DNS, the TCP connect, the TLS handshake and waiting
+    /// for the server's <c>101 Switching Protocols</c> response. Default: 10 seconds.
+    /// </summary>
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long a graceful disconnect waits for the server's Close frame before dropping the
+    /// transport (RFC 6455 Section 7.1.4). Also bounds writing the Close frame itself, so an
+    /// unresponsive peer cannot stall teardown. Zero closes without waiting. Default: 5 seconds.
+    /// </summary>
+    public TimeSpan CloseTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Maximum allowed frame payload size. Default: 1 MB.</summary>
     public int MaxFrameSize { get; init; } = 1024 * 1024;

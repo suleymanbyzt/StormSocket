@@ -9,7 +9,9 @@
 | `DualMode` | `bool` | `false` | Accept both IPv4 and IPv6 on a single port |
 | `ReceiveBufferSize` | `int` | `65536` | OS socket receive buffer (bytes) |
 | `SendBufferSize` | `int` | `65536` | OS socket send buffer (bytes) |
-| `MaxConnections` | `int` | `0` | Max concurrent connections (0 = unlimited). Excess are rejected at TCP level |
+| `MaxConnections` | `int` | `0` | Max concurrent connections (0 = unlimited). Claimed at accept time, so connections still negotiating TLS or the WebSocket upgrade count against it |
+| `MaxConnectionsPerIp` | `int` | `0` | Max concurrent connections from one address (0 = unlimited). Ignored for Unix sockets, and leave it at 0 behind a reverse proxy where every connection appears to come from the proxy |
+| `TlsHandshakeTimeout` | `TimeSpan` | `10s` | Max time for the TLS handshake on an accepted connection. Without it a peer that stalls mid-handshake holds a socket and its pipes indefinitely |
 | `SlowConsumerPolicy` | `SlowConsumerPolicy` | `Wait` | Behavior when a session is backpressured: `Wait`, `Drop`, or `Disconnect` |
 | `Ssl` | `SslOptions?` | `null` | SSL/TLS configuration (null = plain TCP) |
 | `WebSocket` | `WebSocketOptions?` | `null` | WebSocket settings (only for StormWebSocketServer) |
@@ -25,6 +27,9 @@
 | `MaxMessageSize` | `int` | `4194304` | Maximum reassembled message size across all fragments (bytes). Exceeded = close with `MessageTooBig` |
 | `AllowedOrigins` | `IReadOnlyList<string>?` | `null` | Allowed origins for CSWSH protection (RFC 6455 #10.2). `null` = allow all |
 | `HandshakeTimeout` | `TimeSpan` | `5s` | Max time for client to complete WebSocket upgrade after TCP connect. Prevents DoS via idle connections |
+| `MaxRequestHeaderBytes` | `int` | `16384` | Maximum size of the whole upgrade request (request line + headers). Exceeded = `431` and close |
+| `MaxRequestHeaderCount` | `int` | `100` | Maximum number of headers in the upgrade request |
+| `CloseTimeout` | `TimeSpan` | `5s` | How long to wait for the peer's Close frame after this endpoint starts the closing handshake (RFC 6455 #7.1.4). `TimeSpan.Zero` drops TCP immediately |
 | `Heartbeat` | `HeartbeatOptions` | `new()` | Ping/pong heartbeat and dead connection detection settings |
 | `Compression` | `WsCompressionOptions` | `new()` | Permessage-deflate compression settings (RFC 7692). Disabled by default |
 
@@ -65,8 +70,11 @@
 | `MinMessageSize` | `int` | `128` | Messages smaller than this (bytes) are sent uncompressed |
 | `ServerNoContextTakeover` | `bool` | `true` | Reset server compression context per message |
 | `ClientNoContextTakeover` | `bool` | `true` | Reset client compression context per message |
-| `ServerMaxWindowBits` | `int` | `15` | Server LZ77 window size (8-15) |
-| `ClientMaxWindowBits` | `int` | `15` | Client LZ77 window size (8-15) |
+| `ServerMaxWindowBits` | `int` | `15` | Advisory only. `DeflateStream` gives no window-size control, so the library always compresses with the full 15-bit window and **declines** an offer that requires a smaller one, rather than accepting it and ignoring the parameter |
+| `ClientMaxWindowBits` | `int` | `15` | Upper bound confirmed back to a client that offered `client_max_window_bits`. Never sent unsolicited (RFC 7692 #7.1.2.1) |
+
+> Decompressed output is capped at `MaxMessageSize`. A compression bomb — a small frame that inflates
+> to gigabytes — fails the connection with `MessageTooBig` (1009) instead of the process.
 
 ## SocketTuningOptions
 

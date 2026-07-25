@@ -33,12 +33,21 @@ public sealed class WsCompressionOptions
     public bool ClientNoContextTakeover { get; init; } = true;
 
     /// <summary>
-    /// Maximum LZ77 sliding window size for the server compressor (9-15). Default: 15.
+    /// Maximum LZ77 sliding window size for the server compressor (8-15). Default: 15.
     /// </summary>
+    /// <remarks>
+    /// <see cref="DeflateStream"/> exposes no window-size control, so this library always compresses
+    /// with the full 15-bit window. A peer offer that requires a smaller server window is therefore
+    /// declined rather than accepted and ignored (RFC 7692 Section 7.1.2.2).
+    /// </remarks>
     public int ServerMaxWindowBits { get; init; } = 15;
 
     /// <summary>
-    /// Maximum LZ77 sliding window size for the client compressor (9-15). Default: 15.
+    /// Upper bound confirmed back to a client that offers <c>client_max_window_bits</c> (8-15). Default: 15.
     /// </summary>
+    /// <remarks>
+    /// Only used to answer an offer the client actually made; it is never sent unsolicited
+    /// (RFC 7692 Section 7.1.2.1). Decompression always uses the full window, so any value is safe to accept.
+    /// </remarks>
     public int ClientMaxWindowBits { get; init; } = 15;
 }

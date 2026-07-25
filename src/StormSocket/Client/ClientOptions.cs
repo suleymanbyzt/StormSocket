@@ -23,7 +23,10 @@ public sealed class ClientOptions
     /// <summary>Message framing strategy. Null = raw bytes (no framing).</summary>
     public IMessageFramer? Framer { get; init; }
 
-    /// <summary>Connection timeout. Default: 10 seconds.</summary>
+    /// <summary>
+    /// Budget for the whole connect sequence — the TCP connect and, when configured, the TLS
+    /// handshake. Default: 10 seconds.
+    /// </summary>
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Low-level TCP socket tuning (NoDelay, KeepAlive, backpressure limits).</summary>

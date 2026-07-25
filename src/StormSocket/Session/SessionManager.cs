@@ -46,7 +46,15 @@ public sealed class SessionManager
                 continue;
             }
 
-            tasks.Add(networkSession.SendAsync(data, cancellationToken));
+            try
+            {
+                tasks.Add(networkSession.SendAsync(data, cancellationToken));
+            }
+            catch
+            {
+                // a send that throws synchronously must not abandon the batch: every ValueTask
+                // already collected still has to be awaited exactly once.
+            }
         }
 
         foreach (ValueTask task in tasks)
@@ -68,7 +76,14 @@ public sealed class SessionManager
         List<ValueTask> tasks = [];
         foreach (ISession session in _networkSessions.Values)
         {
-            tasks.Add(session.CloseAsync(cancellationToken));
+            try
+            {
+                tasks.Add(session.CloseAsync(cancellationToken));
+            }
+            catch
+            {
+                // as above: a synchronous throw must not strand the already-collected ValueTasks.
+            }
         }
 
         foreach (ValueTask task in tasks)

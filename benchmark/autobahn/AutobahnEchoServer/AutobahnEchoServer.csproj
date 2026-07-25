@@ -5,14 +5,11 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\StormSocket\StormSocket.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Include="..\Shared\LatencyRecorder.cs" Link="LatencyRecorder.cs" />
+    <ProjectReference Include="..\..\..\src\StormSocket\StormSocket.csproj" />
   </ItemGroup>
 
 </Project>

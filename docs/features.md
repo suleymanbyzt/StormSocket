@@ -378,6 +378,43 @@ The `OnExceeded` event fires on every rate limit hit (regardless of action), so 
 
 > **Using .NET's built-in rate limiting?** The `IConnectionMiddleware` interface is your extension point — you can create your own middleware wrapping `System.Threading.RateLimiting` (TokenBucketRateLimiter, SlidingWindowRateLimiter, etc.) without any extra dependencies from StormSocket.
 
+## Message Payload Lifetime
+
+Each connection unmasks incoming frames into a buffer it reuses for the next frame. That is what
+keeps the receive path free of a per-message allocation — and it means `msg.Data` is a window onto
+that buffer, valid while your handler runs and overwritten as soon as the next frame arrives.
+
+Anything you do with the bytes *inside* the handler is safe:
+
+```csharp
+ws.OnMessageReceived += async (session, msg) =>
+{
+    await session.SendAsync(msg.Data);              // echo
+    await ws.Groups.BroadcastAsync("lobby", msg.Data);
+    int checksum = Crc32(msg.Data.Span);
+};
+```
+
+Anything that keeps the bytes *past* the handler needs its own copy. A background queue is the
+common case:
+
+```csharp
+// Application state: work handed to a background worker, so it outlives the handler.
+Channel<byte[]> uploads = Channel.CreateUnbounded<byte[]>();
+
+ws.OnMessageReceived += async (session, msg) =>
+{
+    await uploads.Writer.WriteAsync(msg.Data.ToArray());  // copy: the queue reads it later
+};
+```
+
+Writing `msg.Data` itself into that channel would compile and usually appear to work under light
+load — the worker would just occasionally read whatever frame arrived next. Copy it, and the
+problem does not exist. The same applies to storing it in a field, in `session.Items`, or capturing
+it in a task you do not await.
+
+`msg.Text` decodes into a new string, so it is always safe to keep.
+
 ## Message Fragmentation
 
 StormSocket fully supports WebSocket message fragmentation ([RFC 6455 Section 5.4](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.4)). Fragmented messages are automatically reassembled — your `OnMessageReceived` handler always receives the complete message.

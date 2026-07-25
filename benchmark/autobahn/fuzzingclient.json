@@ -1,0 +1,13 @@
+{
+  "outdir": "./reports/servers",
+  "servers": [
+    {
+      "agent": "StormSocket",
+      "url": "ws://host.docker.internal:9001"
+    }
+  ],
+  "cases": ["*"],
+  "__comment_exclude": "Section 9 is a throughput sweep with 16 MB payloads: it takes longer than the rest of the suite combined and measures the machine, not conformance. Everything that judges protocol behaviour - framing, ping/pong, reserved bits, opcodes, fragmentation, UTF-8, close handling and permessage-deflate - is included.",
+  "exclude-cases": ["9.*"],
+  "exclude-agent-cases": {}
+}

@@ -1,0 +1,86 @@
+name: Autobahn
+
+# The Autobahn Testsuite is the reference conformance suite for RFC 6455. It is kept in its own
+# workflow because it needs Docker and takes a few minutes, and because its report is the thing to
+# link to when someone asks whether this library really implements the protocol.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  autobahn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build echo server
+        run: dotnet build benchmark/autobahn/AutobahnEchoServer -c Release
+
+      - name: Start echo server
+        run: |
+          nohup dotnet run --no-build -c Release --project benchmark/autobahn/AutobahnEchoServer 9001 > /tmp/autobahn-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if nc -z localhost 9001; then echo "server up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::echo server did not start"
+          cat /tmp/autobahn-server.log
+          exit 1
+
+      - name: Run fuzzing client
+        run: |
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -v "${PWD}/benchmark/autobahn:/config" \
+            -v "${PWD}/benchmark/autobahn/reports:/reports" \
+            crossbario/autobahn-testsuite \
+            wstest --mode fuzzingclient --spec /config/fuzzingclient.json --outdir /reports/servers
+
+      - name: Summarize results
+        id: summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib, sys
+
+          index = pathlib.Path("benchmark/autobahn/reports/servers/index.json")
+          if not index.exists():
+              print("::error::no Autobahn report produced")
+              sys.exit(1)
+
+          results = json.loads(index.read_text())["StormSocket"]
+          failed = {case: r["behavior"] for case, r in results.items()
+                    if r["behavior"] not in ("OK", "INFORMATIONAL", "NON-STRICT")}
+
+          print(f"## Autobahn: {len(results) - len(failed)}/{len(results)} cases passed")
+          if failed:
+              print("\n| Case | Behavior |\n|---|---|")
+              for case, behavior in sorted(failed.items()):
+                  print(f"| {case} | {behavior} |")
+
+          pathlib.Path("failed.txt").write_text("\n".join(sorted(failed)))
+          PY
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-report
+          path: benchmark/autobahn/reports/
+
+      - name: Fail on non-conforming cases
+        run: |
+          if [ -s failed.txt ]; then
+            echo "::error::Autobahn reported non-conforming cases:"
+            cat failed.txt
+            exit 1
+          fi

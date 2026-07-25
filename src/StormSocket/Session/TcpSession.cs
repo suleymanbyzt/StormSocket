@@ -197,6 +197,9 @@ public sealed class TcpSession : ISession
             await _idleTimer.DisposeAsync().ConfigureAwait(false);
         }
 
+        // Retires the write lock before the transport goes away, so a send that is still in flight
+        // finishes against a live pipe instead of faulting on a disposed one.
+        await _connection.DisposeAsync().ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
     }
 }

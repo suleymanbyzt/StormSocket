@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Net;
+using StormSocket.Benchmark;
 using StormSocket.Client;
 using StormSocket.Core;
 
@@ -8,6 +10,7 @@ int clientCount = 100;
 int messages = 1000;
 int size = 32;
 int seconds = 10;
+string mode = "throughput";
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -31,7 +34,16 @@ for (int i = 0; i < args.Length; i++)
         case "-z" or "--seconds":
             seconds = int.Parse(args[++i]);
             break;
+        case "--mode":
+            mode = args[++i];
+            break;
     }
+}
+
+if (mode is not ("throughput" or "latency"))
+{
+    Console.Error.WriteLine("--mode must be 'throughput' or 'latency'");
+    return 1;
 }
 
 Console.WriteLine($"Server address: {address}");
@@ -40,7 +52,14 @@ Console.WriteLine($"Working clients: {clientCount}");
 Console.WriteLine($"Working messages: {messages}");
 Console.WriteLine($"Message size: {size}");
 Console.WriteLine($"Seconds to benchmarking: {seconds}");
+Console.WriteLine($"Mode: {mode}");
 Console.WriteLine();
+
+if (mode == "latency")
+{
+    await RunLatencyAsync(address, port, clientCount, size, seconds);
+    return 0;
+}
 
 byte[] messageToSend = new byte[size];
 long totalErrors = 0;
@@ -145,14 +164,81 @@ Console.WriteLine($"Total messages: {totalMessages}");
 Console.WriteLine($"Data throughput: {FormatData((long)(totalBytes / (totalTime / 1000.0)))}/s");
 if (totalMessages > 0)
 {
-    Console.WriteLine($"Message latency: {FormatTime(totalTime / totalMessages)}");
     Console.WriteLine($"Message throughput: {(long)(totalMessages / (totalTime / 1000.0))} msg/s");
+    Console.WriteLine($"Pipeline depth: ~{clientCount * messages} messages in flight");
+    Console.WriteLine();
+    Console.WriteLine("This is a saturation run: every client keeps a deep send window full, so the");
+    Console.WriteLine("figures above describe throughput only. Run with --mode latency for round-trip times.");
 }
 
 // Cleanup
 foreach (StormTcpClient client in clients)
 {
     await client.DisposeAsync();
+}
+
+return 0;
+
+static async Task RunLatencyAsync(string address, int port, int clientCount, int size, int seconds)
+{
+    byte[] payload = new byte[size];
+    LatencyRecorder recorder = new(capacity: 4_000_000);
+    using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(seconds));
+
+    async Task RunClientAsync()
+    {
+        await using StormTcpClient client = new(new ClientOptions
+        {
+            EndPoint = new IPEndPoint(IPAddress.Parse(address), port),
+            Socket = new SocketTuningOptions { NoDelay = true },
+        });
+
+        // One outstanding message at a time: the echo has to come back before the next one goes out,
+        // which is what makes the measured interval an actual round-trip.
+        TaskCompletionSource<bool>? pending = null;
+        client.OnDataReceived += _ =>
+        {
+            pending?.TrySetResult(true);
+            return ValueTask.CompletedTask;
+        };
+
+        await client.ConnectAsync();
+
+        // Warmup: JIT, TCP window and the server's per-connection buffers settle before measuring.
+        for (int i = 0; i < 200; i++)
+        {
+            pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await client.SendAsync(payload);
+            await pending.Task;
+        }
+
+        while (!deadline.IsCancellationRequested)
+        {
+            pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            long start = Stopwatch.GetTimestamp();
+            await client.SendAsync(payload);
+
+            try
+            {
+                await pending.Task.WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            recorder.Record(Stopwatch.GetTimestamp() - start);
+        }
+    }
+
+    Task[] workers = new Task[clientCount];
+    for (int i = 0; i < clientCount; i++)
+    {
+        workers[i] = RunClientAsync();
+    }
+
+    await Task.WhenAll(workers);
+    recorder.Report($"TCP echo round-trip, {clientCount} concurrent connections, {size}-byte messages");
 }
 
 static string FormatTime(double ms)

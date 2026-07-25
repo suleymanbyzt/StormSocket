@@ -12,7 +12,10 @@ public sealed class TcpTransport : ITransport
     private readonly CancellationTokenSource _cts = new();
     private Task? _receiveTask;
     private Task? _sendTask;
-    private bool _disposed;
+    private int _disposed;
+
+    /// <summary>How long a close waits for queued data to reach the peer before giving up on it.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
 
     public PipeReader Input => _receivePipe.Reader;
     public PipeWriter Output => _sendPipe.Writer;
@@ -48,6 +51,7 @@ public sealed class TcpTransport : ITransport
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         PipeWriter writer = _receivePipe.Writer;
+        Exception? error = null;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -70,12 +74,17 @@ public sealed class TcpTransport : ITransport
         catch (OperationCanceledException) { }
         catch (SocketException ex)
         {
-            HandleSocketError(ex.SocketErrorCode);
+            // A genuine fault is handed to the reader so the consumer sees a broken connection
+            // instead of a clean end of stream; an expected disconnect stays a clean end of stream.
+            if (HandleSocketError(ex.SocketErrorCode))
+            {
+                error = ex;
+            }
         }
         catch (ObjectDisposedException) { }
         finally
         {
-            await writer.CompleteAsync().ConfigureAwait(false);
+            await writer.CompleteAsync(error).ConfigureAwait(false);
         }
     }
 
@@ -115,7 +124,8 @@ public sealed class TcpTransport : ITransport
         }
     }
 
-    private void HandleSocketError(SocketError error)
+    /// <returns>True when the error is a real fault, false when it is an expected disconnect.</returns>
+    private bool HandleSocketError(SocketError error)
     {
         // these errors usually indicate an expected or graceful disconnect.
         // skipping them for now. this logic might evolve once the edge cases
@@ -126,15 +136,32 @@ public sealed class TcpTransport : ITransport
             or SocketError.OperationAborted
             or SocketError.Shutdown)
         {
-            return;
+            return false;
         }
 
         OnSocketError?.Invoke(error);
+        return true;
     }
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
     {
         await _sendPipe.Writer.CompleteAsync().ConfigureAwait(false);
+
+        // Completing the writer makes the send loop flush what is still queued and then exit by
+        // itself. Cancelling before that would abandon everything the pipe is holding, so the loop
+        // gets a bounded window to reach the peer; a peer that stopped reading cannot stall
+        // shutdown beyond it.
+        if (_sendTask is not null)
+        {
+            try
+            {
+                await _sendTask.WaitAsync(DrainTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timed out, cancelled, or the loop already faulted — nothing left to drain.
+            }
+        }
 
 #if NET8_0_OR_GREATER
         await _cts.CancelAsync().ConfigureAwait(false);
@@ -145,11 +172,6 @@ public sealed class TcpTransport : ITransport
         if (_receiveTask is not null)
         {
             await _receiveTask.ConfigureAwait(false);
-        }
-
-        if (_sendTask is not null)
-        {
-            await _sendTask.ConfigureAwait(false);
         }
 
         try
@@ -165,14 +187,20 @@ public sealed class TcpTransport : ITransport
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
-        
-        _disposed = true;
 
         await CloseAsync().ConfigureAwait(false);
+
+        // A Pipe only returns its rented segments once both ends are completed, and the receive
+        // loop only ever completes the writer. Consumers are done by the time the transport is
+        // disposed, so this is the first point where completing the reader cannot pull buffers
+        // out from under an in-flight read.
+        await _receivePipe.Reader.CompleteAsync().ConfigureAwait(false);
+        await _receivePipe.Writer.CompleteAsync().ConfigureAwait(false);
+
         _cts.Dispose();
     }
 }

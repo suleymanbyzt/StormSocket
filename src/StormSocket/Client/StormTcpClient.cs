@@ -29,8 +29,22 @@ public class StormTcpClient : IAsyncDisposable
     private readonly ClientOptions _options;
     private readonly ILogger _logger;
     private readonly MiddlewarePipeline _pipeline = new();
+
+    private readonly AsyncEventSource<ClientConnectedHandler> _onConnected = new();
+    private readonly AsyncEventSource<ClientDisconnectedHandler> _onDisconnected = new();
+    private readonly AsyncEventSource<ClientDataReceivedHandler> _onDataReceived = new();
+    private readonly AsyncEventSource<ClientErrorHandler> _onError = new();
+    private readonly AsyncEventSource<ClientReconnectingHandler> _onReconnecting = new();
+
+    /// <summary>
+    /// True for the whole async flow of the receive loop, including the middleware and handlers it
+    /// invokes. A disconnect raised from inside that flow must not await the loop it is running on.
+    /// </summary>
+    private readonly AsyncLocal<bool> _onRunLoop = new();
+
     private ITransport? _transport;
     private PipeConnection? _connection;
+    private ClientSessionAdapter? _session;
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private bool _disposed;
@@ -50,19 +64,39 @@ public class StormTcpClient : IAsyncDisposable
     public EndPoint? RemoteEndPoint => _options.EndPoint;
 
     /// <summary>Fired when connection to the server is established.</summary>
-    public event ClientConnectedHandler? OnConnected;
+    public event ClientConnectedHandler? OnConnected
+    {
+        add => _onConnected.Add(value);
+        remove => _onConnected.Remove(value);
+    }
 
     /// <summary>Fired when disconnected from the server.</summary>
-    public event ClientDisconnectedHandler? OnDisconnected;
+    public event ClientDisconnectedHandler? OnDisconnected
+    {
+        add => _onDisconnected.Add(value);
+        remove => _onDisconnected.Remove(value);
+    }
 
     /// <summary>Fired when data (or a framed message) is received from the server.</summary>
-    public event ClientDataReceivedHandler? OnDataReceived;
+    public event ClientDataReceivedHandler? OnDataReceived
+    {
+        add => _onDataReceived.Add(value);
+        remove => _onDataReceived.Remove(value);
+    }
 
     /// <summary>Fired when an error occurs.</summary>
-    public event ClientErrorHandler? OnError;
+    public event ClientErrorHandler? OnError
+    {
+        add => _onError.Add(value);
+        remove => _onError.Remove(value);
+    }
 
     /// <summary>Fired when attempting to reconnect.</summary>
-    public event ClientReconnectingHandler? OnReconnecting;
+    public event ClientReconnectingHandler? OnReconnecting
+    {
+        add => _onReconnecting.Add(value);
+        remove => _onReconnecting.Remove(value);
+    }
 
     public StormTcpClient(ClientOptions options)
     {
@@ -73,9 +107,30 @@ public class StormTcpClient : IAsyncDisposable
     /// <summary>Registers a middleware that intercepts connection lifecycle and data flow.</summary>
     public void UseMiddleware(IConnectionMiddleware middleware) => _pipeline.Use(middleware);
 
+    /// <summary>
+    /// Invokes every OnError subscriber in registration order. Never throws: a handler that fails is
+    /// logged, because this also runs on paths that are already tearing the connection down.
+    /// </summary>
+    private async ValueTask RaiseErrorAsync(Exception exception)
+    {
+        foreach (ClientErrorHandler handler in _onError.Handlers)
+        {
+            try
+            {
+                await handler(exception).ConfigureAwait(false);
+            }
+            catch (Exception handlerEx)
+            {
+                _logger.LogError(handlerEx, "Unhandled exception in OnError handler");
+            }
+        }
+    }
+
     /// <summary>Connects to the server. If auto-reconnect is enabled, reconnects on disconnect.</summary>
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
+        // A previous source still holds a registration on the token it was linked to.
+        _cts?.Dispose();
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         if (_options.Reconnect.Enabled)
@@ -110,6 +165,8 @@ public class StormTcpClient : IAsyncDisposable
 
         _options.Socket.ApplyKeepAlive(socket);
 
+        // The whole sequence runs on this budget: a server that completes TCP and then stalls in TLS
+        // would otherwise keep ConnectAsync pending forever.
         using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(_options.ConnectTimeout);
 
@@ -119,6 +176,7 @@ public class StormTcpClient : IAsyncDisposable
         }
         catch
         {
+            _state = ConnectionState.Closed;
             socket.Dispose();
             throw;
         }
@@ -128,69 +186,107 @@ public class StormTcpClient : IAsyncDisposable
         {
             transport = new SslTransport(
                 socket,
-                _options.Ssl.TargetHost,
+                ClientSslOptions.ResolveTargetHost(_options.Ssl, ResolveHost(_options.EndPoint)),
                 _options.Ssl.Protocols,
-                _options.Ssl.RemoteCertificateValidation,
-                _options.Ssl.ClientCertificate);
+                _options.Ssl.ResolveValidationCallback(),
+                _options.Ssl.ClientCertificate,
+                _options.Socket.MaxPendingReceiveBytes,
+                _options.Socket.MaxPendingSendBytes);
         }
         else
         {
             transport = new TcpTransport(socket, _options.Socket.MaxPendingReceiveBytes, _options.Socket.MaxPendingSendBytes);
         }
 
-        await transport.HandshakeAsync(ct).ConfigureAwait(false);
-
-        IMessageFramer framer = _options.Framer ?? RawFramer.Instance;
-        ClientSessionAdapter sessionAdapter = new ClientSessionAdapter(this);
-
-        _connection = new PipeConnection(
-            transport,
-            framer,
-            async data =>
-            {
-                Metrics.AddBytesReceived(data.Length);
-
-                ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, data).ConfigureAwait(false);
-                if (processed.IsEmpty)
-                {
-                    return;
-                }
-
-                if (OnDataReceived is not null)
-                {
-                    await OnDataReceived.Invoke(processed).ConfigureAwait(false);
-                }
-            },
-            async ex =>
-            {
-                if (OnError is not null)
-                {
-                    await OnError.Invoke(ex).ConfigureAwait(false);
-                }
-            });
-
-        if (transport is TcpTransport tcp)
+        try
         {
-            tcp.OnSocketError = error =>
+            await transport.HandshakeAsync(timeoutCts.Token).ConfigureAwait(false);
+
+            IMessageFramer framer = _options.Framer ?? RawFramer.Instance;
+
+            // One adapter per connection: middleware that stores per-session state in OnConnected
+            // must see the same Items dictionary again in OnDataReceived/OnDisconnected/OnError.
+            ClientSessionAdapter sessionAdapter = new ClientSessionAdapter(this);
+            _session = sessionAdapter;
+
+            _connection = new PipeConnection(
+                transport,
+                framer,
+                async data =>
+                {
+                    Metrics.AddBytesReceived(data.Length);
+
+                    ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, data).ConfigureAwait(false);
+                    if (processed.IsEmpty)
+                    {
+                        return;
+                    }
+
+                    // A throwing handler must not take the read loop down with it.
+                    foreach (ClientDataReceivedHandler handler in _onDataReceived.Handlers)
+                    {
+                        try
+                        {
+                            await handler(processed).ConfigureAwait(false);
+                        }
+                        catch (Exception handlerEx)
+                        {
+                            _logger.LogError(handlerEx, "Unhandled exception in OnDataReceived handler");
+                        }
+                    }
+                },
+                async ex => await RaiseErrorAsync(ex).ConfigureAwait(false));
+
+            if (transport is TcpTransport tcp)
             {
-                OnError?.Invoke(new SocketException((int)error));
-            };
+                // The transport callback is synchronous, so the handlers run detached.
+                // RaiseErrorAsync swallows and logs handler failures, so nothing can fault here.
+                tcp.OnSocketError = error => _ = RaiseErrorAsync(new SocketException((int)error)).AsTask();
+            }
+
+            _transport = transport;
+            _state = ConnectionState.Connected;
+            _logger.LogInformation("Connected to {EndPoint}", _options.EndPoint);
+
+            await _pipeline.OnConnectedAsync(sessionAdapter).ConfigureAwait(false);
+            foreach (ClientConnectedHandler handler in _onConnected.Handlers)
+            {
+                try
+                {
+                    await handler().ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnConnected handler");
+                }
+            }
         }
-
-        _transport = transport;
-        _state = ConnectionState.Connected;
-        _logger.LogInformation("Connected to {EndPoint}", _options.EndPoint);
-
-        await _pipeline.OnConnectedAsync(sessionAdapter).ConfigureAwait(false);
-        if (OnConnected is not null)
+        catch
         {
-            await OnConnected.Invoke().ConfigureAwait(false);
+            // From construction on the transport owns the socket, two pipes and (after the handshake)
+            // two I/O loop tasks. Nothing else ever releases them if a later step fails, so with
+            // reconnect enabled every failed attempt would leak one socket and two orphan tasks.
+            _state = ConnectionState.Closed;
+            _transport = null;
+            _session = null;
+            _connection = null;
+            await transport.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
+    /// <summary>The SNI/verification host for an endpoint whose SSL options left TargetHost unset.</summary>
+    private static string ResolveHost(EndPoint endPoint) => endPoint switch
+    {
+        DnsEndPoint dns => dns.Host,
+        IPEndPoint ip => ip.Address.ToString(),
+        _ => endPoint.ToString() ?? string.Empty,
+    };
+
     private async Task RunReceiveLoopAsync(CancellationToken ct)
     {
-        ClientSessionAdapter sessionAdapter = new ClientSessionAdapter(this);
+        _onRunLoop.Value = true;
+        ClientSessionAdapter sessionAdapter = _session ??= new ClientSessionAdapter(this);
         try
         {
             await _connection!.RunAsync(ct).ConfigureAwait(false);
@@ -200,11 +296,17 @@ public class StormTcpClient : IAsyncDisposable
             if (_disconnectReason == DisconnectReason.None)
                 _disconnectReason = DisconnectReason.TransportError;
             _logger.LogError(ex, "Transport error");
-            await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
-            if (OnError is not null)
+
+            try
             {
-                await OnError.Invoke(ex).ConfigureAwait(false);
+                await _pipeline.OnErrorAsync(sessionAdapter, ex).ConfigureAwait(false);
             }
+            catch (Exception mwEx)
+            {
+                _logger.LogError(mwEx, "Middleware OnError exception");
+            }
+
+            await RaiseErrorAsync(ex).ConfigureAwait(false);
         }
         finally
         {
@@ -216,77 +318,137 @@ public class StormTcpClient : IAsyncDisposable
 
             DisconnectReason reason = _disconnectReason;
             _logger.LogInformation("Disconnected: {Reason}", reason);
-            await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
-            if (OnDisconnected is not null)
+
+            // Every user callback below is wrapped: an exception thrown out of this finally would
+            // skip the transport disposal underneath it and leak the socket on every reconnect cycle.
+            try
             {
-                await OnDisconnected.Invoke(reason).ConfigureAwait(false);
+                await _pipeline.OnDisconnectedAsync(sessionAdapter, reason).ConfigureAwait(false);
+            }
+            catch (Exception mwEx)
+            {
+                _logger.LogError(mwEx, "Middleware OnDisconnected exception");
             }
 
-            if (_transport is not null)
+            foreach (ClientDisconnectedHandler handler in _onDisconnected.Handlers)
             {
-                await _transport.DisposeAsync().ConfigureAwait(false);
-                _transport = null;
+                try
+                {
+                    await handler(reason).ConfigureAwait(false);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "Unhandled exception in OnDisconnected handler");
+                }
+            }
+
+            ITransport? transport = _transport;
+            _transport = null;
+            if (transport is not null)
+            {
+                await transport.DisposeAsync().ConfigureAwait(false);
             }
 
             _connection = null;
         }
     }
 
+    /// <remarks>
+    /// Never throws and never faults its task: nobody observes it, so a fault here would surface as an
+    /// unobserved task exception. Failures reach the caller through <paramref name="firstConnect"/>
+    /// and every subscriber through OnError.
+    /// </remarks>
     private async Task ReconnectLoopAsync(TaskCompletionSource? firstConnect, CancellationToken ct)
     {
         int attempt = 0;
         bool isFirstConnect = true;
+        Exception? lastError = null;
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                await ConnectCoreAsync(ct).ConfigureAwait(false);
-
-                if (isFirstConnect)
+                try
                 {
-                    isFirstConnect = false;
-                    firstConnect?.TrySetResult();
+                    await ConnectCoreAsync(ct).ConfigureAwait(false);
+
+                    if (isFirstConnect)
+                    {
+                        isFirstConnect = false;
+                        firstConnect?.TrySetResult();
+                    }
+
+                    attempt = 0;
+                    await RunReceiveLoopAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    await RaiseErrorAsync(ex).ConfigureAwait(false);
                 }
 
-                attempt = 0;
-                await RunReceiveLoopAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                if (OnError is not null)
+                if (ct.IsCancellationRequested)
                 {
-                    await OnError.Invoke(ex).ConfigureAwait(false);
+                    break;
+                }
+
+                attempt++;
+                if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
+                {
+                    _logger.LogWarning("Max reconnect attempts ({MaxAttempts}) reached", _options.Reconnect.MaxAttempts);
+                    firstConnect?.TrySetException(new InvalidOperationException(
+                        $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded.", lastError));
+                    break;
+                }
+
+                _logger.LogDebug("Reconnect attempt {Attempt} in {Delay}", attempt, _options.Reconnect.Delay);
+                foreach (ClientReconnectingHandler handler in _onReconnecting.Handlers)
+                {
+                    try
+                    {
+                        await handler(attempt, _options.Reconnect.Delay).ConfigureAwait(false);
+                    }
+                    catch (Exception handlerEx)
+                    {
+                        _logger.LogError(handlerEx, "Unhandled exception in OnReconnecting handler");
+                    }
+                }
+
+                try
+                {
+                    await Task.Delay(_options.Reconnect.Delay, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
             }
-
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Reconnect loop terminated");
+            lastError = ex;
+        }
+        finally
+        {
+            // ConnectAsync awaits this promise; every exit that never reported a first connect has to
+            // resolve it or the caller waits forever. Already-resolved promises ignore these calls.
             if (ct.IsCancellationRequested)
             {
-                break;
+                firstConnect?.TrySetCanceled(ct);
             }
-
-            attempt++;
-            if (_options.Reconnect.MaxAttempts > 0 && attempt > _options.Reconnect.MaxAttempts)
+            else if (lastError is not null)
             {
-                _logger.LogWarning("Max reconnect attempts ({MaxAttempts}) reached", _options.Reconnect.MaxAttempts);
+                firstConnect?.TrySetException(lastError);
+            }
+            else
+            {
                 firstConnect?.TrySetException(new InvalidOperationException(
-                    $"Max reconnect attempts ({_options.Reconnect.MaxAttempts}) exceeded."));
-                break;
-            }
-
-            _logger.LogDebug("Reconnect attempt {Attempt} in {Delay}", attempt, _options.Reconnect.Delay);
-            if (OnReconnecting is not null)
-            {
-                await OnReconnecting.Invoke(attempt, _options.Reconnect.Delay).ConfigureAwait(false);
-            }
-
-            try
-            {
-                await Task.Delay(_options.Reconnect.Delay, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
+                    "The reconnect loop stopped before the first connection was established."));
             }
         }
     }
@@ -294,12 +456,13 @@ public class StormTcpClient : IAsyncDisposable
     /// <summary>Sends data to the server.</summary>
     public ValueTask SendAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
-        if (_state is not ConnectionState.Connected || _connection is null)
+        PipeConnection? connection = _connection;
+        if (_state is not ConnectionState.Connected || connection is null)
         {
             throw new InvalidOperationException("Client is not connected.");
         }
 
-        ValueTask sendTask = _connection.SendAsync(data, cancellationToken);
+        ValueTask sendTask = connection.SendAsync(data, cancellationToken);
         if (sendTask.IsCompletedSuccessfully)
         {
             Metrics.AddBytesSent(data.Length);
@@ -318,12 +481,10 @@ public class StormTcpClient : IAsyncDisposable
     /// <summary>Gracefully disconnects from the server.</summary>
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
-        if (_state is ConnectionState.Closing or ConnectionState.Closed)
+        if (_state is ConnectionState.Connected)
         {
-            return;
+            _state = ConnectionState.Closing;
         }
-
-        _state = ConnectionState.Closing;
 
         if (_cts is not null)
         {
@@ -334,11 +495,14 @@ public class StormTcpClient : IAsyncDisposable
 #endif
         }
 
-        if (_runTask is not null)
+        // Awaited even when the connection was already closing: the run loop owns the transport, so
+        // returning before it finishes would report a clean shutdown over a still-live connection.
+        // Skipped when this call came out of the run loop itself, which would be a wait on itself.
+        if (!_onRunLoop.Value && _runTask is Task runTask)
         {
             try
             {
-                await _runTask.ConfigureAwait(false);
+                await runTask.ConfigureAwait(false);
             }
             catch
             {
@@ -358,6 +522,16 @@ public class StormTcpClient : IAsyncDisposable
         GC.SuppressFinalize(this);
 
         await DisconnectAsync().ConfigureAwait(false);
+
+        // A connection that never reached the run loop (connect cancelled mid-handshake) has nobody
+        // else to release its transport.
+        ITransport? transport = _transport;
+        _transport = null;
+        if (transport is not null)
+        {
+            await transport.DisposeAsync().ConfigureAwait(false);
+        }
+
         _cts?.Dispose();
     }
 }

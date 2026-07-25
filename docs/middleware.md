@@ -124,6 +124,8 @@ var rateLimiter = new RateLimitMiddleware(new RateLimitOptions
 | `MaxMessages` | 100 | Max allowed messages per window |
 | `Scope` | `Session` | `Session` or `IpAddress` |
 | `ExceededAction` | `Disconnect` | `Disconnect` the client or `Drop` the message |
+| `SlidingWindow` | `true` | Sliding window. Set to `false` for the old fixed window, which lets up to 2x `MaxMessages` through across a window boundary |
+| `CountControlFrames` | `true` | Also meter control frames and individual fragments. With this off, a ping flood costs the sender nothing while the server auto-pongs every one |
 
 ### Events
 

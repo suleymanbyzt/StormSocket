@@ -101,6 +101,30 @@ public sealed class WsUpgradeContext
             throw new ArgumentException("Subprotocol cannot be null or empty.", nameof(subprotocol));
         }
 
+        // The value is echoed into the 101 response, so it may only ever be one of the tokens the
+        // client itself offered (RFC 6455 4.2.2 step 4) and must stay within the token charset.
+        if (!WsUpgradeHandler.IsToken(subprotocol))
+        {
+            throw new ArgumentException("Subprotocol is not a valid RFC 6455 token.", nameof(subprotocol));
+        }
+
+        bool wasRequested = false;
+        foreach (string requested in RequestedSubprotocols)
+        {
+            if (string.Equals(requested, subprotocol, StringComparison.Ordinal))
+            {
+                wasRequested = true;
+                break;
+            }
+        }
+
+        if (!wasRequested)
+        {
+            throw new ArgumentException(
+                $"Subprotocol '{subprotocol}' was not offered by the client.",
+                nameof(subprotocol));
+        }
+
         SelectedSubprotocol = subprotocol;
         Accept();
     }

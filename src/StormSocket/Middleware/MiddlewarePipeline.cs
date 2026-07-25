@@ -7,6 +7,9 @@ public sealed class MiddlewarePipeline
 {
     private readonly List<IConnectionMiddleware> _middlewares = [];
 
+    /// <summary>True when at least one middleware is registered. Lets hot paths skip the hook entirely.</summary>
+    public bool HasMiddleware => _middlewares.Count > 0;
+
     public void Use(IConnectionMiddleware middleware)
     {
         _middlewares.Add(middleware);
@@ -60,6 +63,30 @@ public sealed class MiddlewarePipeline
         }
         
         return current;
+    }
+
+    /// <summary>Runs the per-frame hook. Returns false when a middleware wants the frame dropped.</summary>
+    public ValueTask<bool> OnFrameReceivedAsync(ISession session)
+    {
+        if (_middlewares.Count == 0)
+        {
+            return new ValueTask<bool>(true);
+        }
+
+        return OnFrameReceivedSlowAsync(session);
+    }
+
+    private async ValueTask<bool> OnFrameReceivedSlowAsync(ISession session)
+    {
+        for (int i = 0; i < _middlewares.Count; i++)
+        {
+            if (!await _middlewares[i].OnFrameReceivedAsync(session).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public async ValueTask OnDisconnectedAsync(ISession session, DisconnectReason reason)
