@@ -39,12 +39,18 @@ jobs:
 
       - name: Run fuzzing client
         run: |
+          mkdir -p benchmark/autobahn/reports
+          # The report directory comes from the spec file's "outdir"; wstest has no --outdir option.
           docker run --rm \
             --add-host=host.docker.internal:host-gateway \
             -v "${PWD}/benchmark/autobahn:/config" \
             -v "${PWD}/benchmark/autobahn/reports:/reports" \
             crossbario/autobahn-testsuite \
-            wstest --mode fuzzingclient --spec /config/fuzzingclient.json --outdir /reports/servers
+            wstest --mode fuzzingclient --spec /config/fuzzingclient.json
+
+      - name: Take ownership of the report
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" benchmark/autobahn/reports || true
 
       - name: Summarize results
         id: summary
@@ -58,8 +64,15 @@ jobs:
               sys.exit(1)
 
           results = json.loads(index.read_text())["StormSocket"]
-          failed = {case: r["behavior"] for case, r in results.items()
-                    if r["behavior"] not in ("OK", "INFORMATIONAL", "NON-STRICT")}
+
+          # A case has two verdicts: what the implementation did with the payload, and how it closed.
+          # Both have to be acceptable — echoing correctly and then closing with the wrong code is
+          # still a protocol violation.
+          acceptable = ("OK", "INFORMATIONAL", "NON-STRICT")
+          failed = {case: f"{r['behavior']} / close: {r.get('behaviorClose', '-')}"
+                    for case, r in results.items()
+                    if r["behavior"] not in acceptable
+                    or r.get("behaviorClose", "OK") not in acceptable}
 
           print(f"## Autobahn: {len(results) - len(failed)}/{len(results)} cases passed")
           if failed:

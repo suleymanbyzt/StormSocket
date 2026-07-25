@@ -31,6 +31,10 @@ public sealed class WebSocketSession : IWebSocketSession
     private int _closeFrameSent;
     private volatile bool _closeReceived;
     private readonly TaskCompletionSource _closeHandshake = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _closeCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Upper bound on how long a second caller waits for an in-flight close to finish.</summary>
+    private static readonly TimeSpan CloseObservationTimeout = TimeSpan.FromSeconds(30);
     private TimeSpan _closeTimeout = TimeSpan.FromSeconds(5);
     private Task? _abortTask;
     private WsHeartbeat? _heartbeat;
@@ -438,6 +442,18 @@ public sealed class WebSocketSession : IWebSocketSession
     {
         if (Interlocked.CompareExchange(ref _closeGuard, 1, 0) != 0)
         {
+            // Another close is already running. Waiting for it rather than returning immediately is
+            // what keeps DisposeAsync from retiring the transport underneath an in-flight close —
+            // that close is parked in the closing handshake and will come back to use it.
+            try
+            {
+                await _closeCompleted.Task.WaitAsync(CloseObservationTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The owner is stuck or the caller gave up; teardown proceeds either way.
+            }
+
             return;
         }
 
@@ -481,8 +497,15 @@ public sealed class WebSocketSession : IWebSocketSession
             }
         }
 
-        await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
-        _state = ConnectionState.Closed;
+        try
+        {
+            await _transport.CloseAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _state = ConnectionState.Closed;
+            _closeCompleted.TrySetResult();
+        }
     }
 
     public void Abort()
@@ -495,9 +518,22 @@ public sealed class WebSocketSession : IWebSocketSession
         SetDisconnectReason(DisconnectReason.Aborted);
         _state = ConnectionState.Closing;
 
-        // Abort is synchronous by contract, so the close runs detached — but the task is kept so
-        // DisposeAsync can await it instead of tearing the transport down underneath it.
-        _abortTask = _transport.CloseAsync().AsTask();
+        // Abort is synchronous by contract, so the close runs detached — but it is still published
+        // so DisposeAsync can await it instead of tearing the transport down underneath it.
+        _abortTask = AbortCoreAsync();
+    }
+
+    private async Task AbortCoreAsync()
+    {
+        try
+        {
+            await _transport.CloseAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _state = ConnectionState.Closed;
+            _closeCompleted.TrySetResult();
+        }
     }
 
     public void JoinGroup(string group)

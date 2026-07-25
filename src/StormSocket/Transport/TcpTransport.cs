@@ -145,6 +145,13 @@ public sealed class TcpTransport : ITransport
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
     {
+        // Closing a transport that is already disposed is a normal race, not a caller error: a
+        // session teardown and an application-initiated close can reach here from two directions.
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
         await _sendPipe.Writer.CompleteAsync().ConfigureAwait(false);
 
         // Completing the writer makes the send loop flush what is still queued and then exit by
@@ -163,11 +170,19 @@ public sealed class TcpTransport : ITransport
             }
         }
 
+        try
+        {
 #if NET8_0_OR_GREATER
-        await _cts.CancelAsync().ConfigureAwait(false);
+            await _cts.CancelAsync().ConfigureAwait(false);
 #else
-        _cts.Cancel();
+            _cts.Cancel();
 #endif
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed while draining — the loops are already being torn down.
+            return;
+        }
 
         if (_receiveTask is not null)
         {

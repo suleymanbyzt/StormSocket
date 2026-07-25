@@ -16,6 +16,7 @@ public sealed class TcpSession : ISession
     private volatile ConnectionState _state;
     private int _disconnectReason;
     private int _closeGuard;
+    private Task? _abortTask;
     private IdleTimer? _idleTimer;
 
     public long Id { get; }
@@ -157,7 +158,10 @@ public sealed class TcpSession : ISession
 
         SetDisconnectReason(DisconnectReason.Aborted);
         _state = ConnectionState.Closing;
-        _ = _transport.CloseAsync();
+
+        // Abort is synchronous by contract, so the close runs detached — but it is still published
+        // so DisposeAsync can await it instead of tearing the transport down underneath it.
+        _abortTask = _transport.CloseAsync().AsTask();
     }
 
     public void JoinGroup(string group)
@@ -191,6 +195,18 @@ public sealed class TcpSession : ISession
     public async ValueTask DisposeAsync()
     {
         await CloseAsync().ConfigureAwait(false);
+
+        if (_abortTask is not null)
+        {
+            try
+            {
+                await _abortTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // ignored
+            }
+        }
 
         if (_idleTimer is not null)
         {
