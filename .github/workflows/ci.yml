@@ -15,6 +15,7 @@ permissions:
   contents: write
   packages: write
   pull-requests: write
+  id-token: write   # lets the job exchange a GitHub OIDC token for a short-lived nuget.org key
 
 jobs:
   build-and-test:
@@ -130,9 +131,19 @@ jobs:
             fi
           done
 
+      # Trusted Publishing: nuget.org issues a key that lives for an hour, so there is no long-lived
+      # secret to leak or rotate, and the policy covers every package this account owns — including
+      # ones that do not exist on nuget.org yet.
+      - name: NuGet login
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: suleyman.bayazit   # nuget.org profile name, not the GitHub handle
+
       - name: Push to NuGet
         if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
-        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Push to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
