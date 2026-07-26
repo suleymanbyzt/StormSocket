@@ -12,7 +12,7 @@
 
     <!-- NuGet Package -->
     <PackageId>StormSocket.Extensions.Hosting</PackageId>
-    <Version>5.0.0</Version>
+    <Version>5.1.0</Version>
     <Authors>suleymanbyzt</Authors>
     <Description>Dependency injection and Generic Host integration for StormSocket: AddStormWebSocketServer, handler abstractions resolved from DI, hosted service lifecycle with graceful drain, and health checks.</Description>
     <PackageTags>tcp;websocket;server;dependency-injection;hosting;aspnetcore;healthchecks;stormsocket</PackageTags>

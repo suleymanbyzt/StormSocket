@@ -4,11 +4,10 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.0.0]
+## [5.1.0]
 
-A correctness and hardening release. The WebSocket layer framed and routed messages correctly but
-never validated them, so peers could drive the server outside the protocol; several of those paths
-were remotely reachable. Every change below is covered by a regression test.
+Integration and lifecycle work on top of 5.0.0: a StormSocket server can now be part of a .NET
+Generic Host instead of something an application starts on the side.
 
 ### Added — hosting and dependency injection
 
@@ -51,10 +50,24 @@ were remotely reachable. Every change below is covered by a regression test.
   `DualMode` with a Unix socket throwing an `InvalidCastException` in the accept loop — now fail at
   startup with a message naming the property. `StormTcpServer` also warns when `WebSocket` options
   are set on it, which it silently ignores.
-- Options properties changed from `init` to `set`. Object-initializer usage is unchanged; the point
-  is that `AddStormWebSocketServer(o => o.MaxConnections = ...)` and configuration binding now
-  compile. Note that servers snapshot `WebSocket`, `MaxConnections` and `MaxConnectionsPerIp` in
+- Options properties changed from `init` to `set`. Source-compatible — object initializers still
+  compile unchanged — but code compiled against 5.0.0 and swapped onto this assembly without
+  recompiling will not find the old setters; rebuild rather than replacing the DLL in place. The point is that
+  `AddStormWebSocketServer(o => o.MaxConnections = ...)` and configuration binding now compile. Note that servers snapshot `WebSocket`, `MaxConnections` and `MaxConnectionsPerIp` in
   their constructor, so configure before constructing.
+
+### Fixed
+
+- **Disposing an aborted session could hang forever.** Teardown cancelled the token and then waited
+  for the receive loop — but cancelling a token does not interrupt a socket receive that is already
+  in flight, and the socket was only closed after that wait. With a connected, silent peer the wait
+  never ended. The socket is shut down before the loop is awaited, and the wait is bounded.
+
+## [5.0.0]
+
+A correctness and hardening release. The WebSocket layer framed and routed messages correctly but
+never validated them, so peers could drive the server outside the protocol; several of those paths
+were remotely reachable. Every change below is covered by a regression test.
 
 ### Conformance
 
@@ -222,4 +235,5 @@ The README previously claimed full RFC 6455 compliance. These were the gaps:
 10. **`wss://` connections now honor `MaxPendingSendBytes` / `MaxPendingReceiveBytes`.** Applications
     that unknowingly relied on the 64 KB default will see different backpressure behavior.
 
+[5.1.0]: https://github.com/suleymanbyzt/StormSocket/releases/tag/v5.1.0
 [5.0.0]: https://github.com/suleymanbyzt/StormSocket/releases/tag/v5.0.0
