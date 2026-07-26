@@ -10,6 +10,52 @@ A correctness and hardening release. The WebSocket layer framed and routed messa
 never validated them, so peers could drive the server outside the protocol; several of those paths
 were remotely reachable. Every change below is covered by a regression test.
 
+### Added — hosting and dependency injection
+
+- **New package `StormSocket.Extensions.Hosting`.** The core package stays dependency-free; install
+  this one to run a server as part of a .NET Generic Host or ASP.NET Core application.
+
+  ```csharp
+  builder.Services
+      .AddStormWebSocketServer(options => options.MaxConnections = 10_000)
+      .ListenOnAnyIP(8080)
+      .AddHandler<ChatHandler>();
+
+  builder.Services.AddHealthChecks().AddStormWebSocketServer();
+  ```
+
+  - `IWebSocketHandler` / `ITcpConnectionHandler` are resolved from the container. Scoped by
+    default, so injecting a `DbContext` behaves as it does in a web request; register a handler as a
+    singleton to skip the per-message scope on a hot path. Several handlers run in registration
+    order, and one that throws is logged without depriving the others or dropping the connection.
+  - The server starts and stops with the host, drains in-flight work on shutdown, and logs through
+    the application's `ILoggerFactory` with no extra wiring. A failed bind fails the host's startup
+    instead of leaving it running with a dead server.
+  - Health checks report the listening state and active connection count.
+  - See the [hosting guide](docs/hosting.md) and `samples/StormSocket.Samples.AspNetCore`.
+
+### Added — production lifecycle
+
+- **`StopAsync(CancellationToken)` drains in-flight connections.** Shutdown now stops accepting,
+  closes sessions, and waits for connection handlers to finish, bounded by the new
+  `ServerOptions.ShutdownDrainTimeout` (10 s) and the caller's token — so a pod terminating on a
+  grace period finishes the work it can and never hangs past it. It never throws on timeout.
+- **`IsRunning`** on both servers, for health checks and diagnostics.
+- **`StartAsync` fails cleanly.** A throwing bind used to leave the listen socket alive and assigned;
+  it is now disposed, `IsRunning` stays false and `LocalEndPoint` stays null. Starting twice throws
+  `InvalidOperationException` instead of leaking the previous socket.
+- **Options validation.** `ServerOptions`, `WebSocketOptions`, `SslOptions`, `SocketTuningOptions`,
+  `ClientOptions`, `WsClientOptions` and `RateLimitOptions` gained a `Validate()` that runs at
+  `StartAsync`/`ConnectAsync`. Configurations that used to fail obscurely much later — a null
+  certificate surfacing as a `NullReferenceException` inside the TLS handshake of every connection,
+  `DualMode` with a Unix socket throwing an `InvalidCastException` in the accept loop — now fail at
+  startup with a message naming the property. `StormTcpServer` also warns when `WebSocket` options
+  are set on it, which it silently ignores.
+- Options properties changed from `init` to `set`. Object-initializer usage is unchanged; the point
+  is that `AddStormWebSocketServer(o => o.MaxConnections = ...)` and configuration binding now
+  compile. Note that servers snapshot `WebSocket`, `MaxConnections` and `MaxConnectionsPerIp` in
+  their constructor, so configure before constructing.
+
 ### Conformance
 
 - The Autobahn Testsuite now runs in CI. The correctness sections pass **247/247**; the

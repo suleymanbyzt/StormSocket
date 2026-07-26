@@ -40,8 +40,8 @@ StormWebSocketServer server = new(new ServerOptions
             MaxMissedPongs = 3,
             AutoPong = true,
         },
-        MaxMessageSize = 1024 * 1,
         MaxFrameSize = 64 * 1024,
+        MaxMessageSize = 1024 * 1024,
         AllowedOrigins = null, // allow all origins
         Compression = new WsCompressionOptions
         {

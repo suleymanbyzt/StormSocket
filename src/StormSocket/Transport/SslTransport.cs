@@ -264,16 +264,9 @@ public sealed class SslTransport : ITransport
             return;
         }
 
-        if (_receiveTask is not null)
-        {
-            await _receiveTask.ConfigureAwait(false);
-        }
-
-        if (_sslStream is not null)
-        {
-            await _sslStream.DisposeAsync().ConfigureAwait(false);
-        }
-
+        // Shut the socket down before waiting for the receive loop, not after: cancelling the token
+        // does not interrupt a receive that is already in flight, so waiting first would hang for as
+        // long as a connected, silent peer stays quiet.
         try
         {
             _socket.Shutdown(SocketShutdown.Both);
@@ -282,6 +275,24 @@ public sealed class SslTransport : ITransport
         {
             // ignored
         }
+
+        if (_receiveTask is not null)
+        {
+            try
+            {
+                await _receiveTask.WaitAsync(DrainTimeout).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timed out or faulted — the socket is going away regardless.
+            }
+        }
+
+        if (_sslStream is not null)
+        {
+            await _sslStream.DisposeAsync().ConfigureAwait(false);
+        }
+
         _socket.Close();
     }
 

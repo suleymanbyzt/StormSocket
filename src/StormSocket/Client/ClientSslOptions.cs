@@ -14,25 +14,25 @@ public sealed class ClientSslOptions
     /// Empty (the default) means "derive it from the connection target": the URI host for
     /// <see cref="StormWebSocketClient"/>, the endpoint host for <see cref="StormTcpClient"/>.
     /// </summary>
-    public string TargetHost { get; init; } = "";
+    public string TargetHost { get; set; } = "";
 
     /// <summary>Allowed TLS protocol versions. Default: let the OS choose.</summary>
-    public SslProtocols Protocols { get; init; } = SslProtocols.None;
+    public SslProtocols Protocols { get; set; } = SslProtocols.None;
 
     /// <summary>Optional client certificate for mutual TLS.</summary>
-    public X509Certificate2? ClientCertificate { get; init; }
+    public X509Certificate2? ClientCertificate { get; set; }
 
     /// <summary>
     /// Custom certificate validation callback. Null = use default system validation.
     /// </summary>
-    public RemoteCertificateValidationCallback? RemoteCertificateValidation { get; init; }
+    public RemoteCertificateValidationCallback? RemoteCertificateValidation { get; set; }
 
     /// <summary>
     /// Checks the server certificate chain against CRL/OCSP. Default: false, matching the platform
     /// default for the underlying <see cref="SslStream"/>. Ignored when
     /// <see cref="RemoteCertificateValidation"/> is set — a custom validator owns the whole decision.
     /// </summary>
-    public bool CheckCertificateRevocation { get; init; }
+    public bool CheckCertificateRevocation { get; set; }
 
     /// <summary>
     /// The validation callback to hand to the transport: the caller's own callback when supplied,

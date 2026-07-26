@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Runs on a newer shared framework than it targets, so the sample works on any machine
+         with a current runtime installed rather than only on the exact one it was built against. -->
+    <RollForward>LatestMajor</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StormSocket.Extensions.Hosting\StormSocket.Extensions.Hosting.csproj" />
+  </ItemGroup>
+
+</Project>

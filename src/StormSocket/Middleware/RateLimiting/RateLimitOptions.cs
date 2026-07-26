@@ -1,3 +1,5 @@
+using StormSocket.Core;
+
 namespace StormSocket.Middleware.RateLimiting;
 
 /// <summary>
@@ -6,16 +8,16 @@ namespace StormSocket.Middleware.RateLimiting;
 public sealed class RateLimitOptions
 {
     /// <summary>The time window for counting messages. Default: 1 second.</summary>
-    public TimeSpan Window { get; init; } = TimeSpan.FromSeconds(1);
+    public TimeSpan Window { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>Maximum number of messages allowed within the window. Default: 100.</summary>
-    public int MaxMessages { get; init; } = 100;
+    public int MaxMessages { get; set; } = 100;
 
     /// <summary>Whether to limit per session or per IP address. Default: Session.</summary>
-    public RateLimitScope Scope { get; init; } = RateLimitScope.Session;
+    public RateLimitScope Scope { get; set; } = RateLimitScope.Session;
 
     /// <summary>Action to take when the limit is exceeded. Default: Disconnect.</summary>
-    public RateLimitAction ExceededAction { get; init; } = RateLimitAction.Disconnect;
+    public RateLimitAction ExceededAction { get; set; } = RateLimitAction.Disconnect;
 
     /// <summary>
     /// Whether protocol frames reported by the server read loop through
@@ -25,7 +27,7 @@ public sealed class RateLimitOptions
     /// counted, so a client can flood control frames (each of which the server answers) for free.
     /// Default: true.
     /// </summary>
-    public bool CountControlFrames { get; init; } = true;
+    public bool CountControlFrames { get; set; } = true;
 
     /// <summary>
     /// Window accounting mode.
@@ -41,5 +43,19 @@ public sealed class RateLimitOptions
     /// boundary (a full window spent just before the reset, plus a full window straight after).
     /// </para>
     /// </summary>
-    public bool SlidingWindow { get; init; } = true;
+    public bool SlidingWindow { get; set; } = true;
+
+    /// <summary>
+    /// Checks that the window and the message allowance describe a usable rate.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="RateLimitMiddleware"/> constructor rejects the same values on its own, so this
+    /// is for callers that want to validate a configuration before building the middleware.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The window or the message allowance is not positive.</exception>
+    public void Validate()
+    {
+        OptionsValidation.RequirePositiveDuration(Window, nameof(RateLimitOptions), nameof(Window), allowInfinite: false);
+        OptionsValidation.RequirePositive(MaxMessages, nameof(RateLimitOptions), nameof(MaxMessages));
+    }
 }

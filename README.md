@@ -117,6 +117,33 @@ await ws.StartAsync();
 > duration of the handler. Copy it (`msg.Data.ToArray()`) if it outlives the call — a queue, a field,
 > a captured closure. `msg.Text` already returns an independent string.
 
+### ASP.NET Core / Generic Host
+
+```bash
+dotnet add package StormSocket.Extensions.Hosting
+```
+
+```csharp
+builder.Services
+    .AddStormWebSocketServer(options => options.MaxConnections = 10_000)
+    .ListenOnAnyIP(8080)
+    .AddHandler<ChatHandler>();
+
+builder.Services.AddHealthChecks().AddStormWebSocketServer();
+```
+
+```csharp
+public sealed class ChatHandler(AppDbContext db) : IWebSocketHandler
+{
+    public async ValueTask OnMessageAsync(IWebSocketSession session, WsMessage message, CancellationToken ct)
+        => await session.SendTextAsync(message.Text, ct);
+}
+```
+
+Handlers are resolved per message from a DI scope, so scoped dependencies work the way they do in a
+web request. The server starts and stops with the host, drains in-flight work on shutdown, and logs
+through the application's logger factory. See the [hosting guide](docs/hosting.md).
+
 ### WebSocket Client
 
 ```csharp
@@ -371,6 +398,7 @@ and it is a trade this project is willing to make. Allocation per message on the
 | [Configuration](docs/configuration.md) | All options tables (ServerOptions, WebSocketOptions, ClientOptions, etc.) |
 | [API Reference](docs/api-reference.md) | ISession, IWebSocketSession, clients, middleware, framers |
 | [Architecture](docs/architecture.md) | Connection lifecycle, write serialization, backpressure internals |
+| [Hosting & DI](docs/hosting.md) | `AddStormWebSocketServer`, handlers from DI, health checks, graceful shutdown |
 | [Changelog](CHANGELOG.md) | Release notes, and the breaking changes in 5.0 |
 
 # Building
@@ -390,6 +418,7 @@ dotnet test
 | `StormSocket.Samples.WsChat` | 8080 | WebSocket broadcast chat |
 | `StormSocket.Samples.SslEcho` | 5001 | SSL/TLS echo with self-signed cert |
 | `StormSocket.Samples.WsServer` | 8080 | Full-featured WS server with admin console, rooms, heartbeat |
+| `StormSocket.Samples.AspNetCore` | 5000 + 8080 | Kestrel and StormSocket in one host: DI handlers, scoped services, health checks |
 
 ```bash
 dotnet run --project samples/StormSocket.Samples.TcpEcho

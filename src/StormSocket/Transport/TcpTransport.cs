@@ -193,11 +193,11 @@ public sealed class TcpTransport : ITransport
             return;
         }
 
-        if (_receiveTask is not null)
-        {
-            await _receiveTask.ConfigureAwait(false);
-        }
-
+        // Shut the socket down before waiting for the receive loop, not after. Cancelling the token
+        // does not interrupt a receive that is already in flight — it completes when data arrives or
+        // the socket goes down — so waiting first would hang for as long as a connected, silent peer
+        // stays quiet. The wait is bounded as well, since a loop that is stuck for any other reason
+        // must not hold shutdown.
         try
         {
             _socket.Shutdown(SocketShutdown.Both);
@@ -206,6 +206,19 @@ public sealed class TcpTransport : ITransport
         {
             // ignored
         }
+
+        if (_receiveTask is not null)
+        {
+            try
+            {
+                await _receiveTask.WaitAsync(DrainTimeout).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timed out or faulted — the socket is going away regardless.
+            }
+        }
+
         _socket.Close();
     }
 

@@ -112,17 +112,23 @@ jobs:
           color: ${{ env.COVERAGE_COLOR }}
 
       - name: Pack
-        run: dotnet pack src/StormSocket/StormSocket.csproj --no-build --configuration Release --output ./nupkg
+        run: |
+          dotnet pack src/StormSocket/StormSocket.csproj --no-build --configuration Release --output ./nupkg
+          dotnet pack src/StormSocket.Extensions.Hosting/StormSocket.Extensions.Hosting.csproj --no-build --configuration Release --output ./nupkg
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
         run: |
-          csproj_version=$(grep -oP '(?<=<Version>).*(?=</Version>)' src/StormSocket/StormSocket.csproj)
           tag_version="${GITHUB_REF_NAME#v}"
-          if [ "$csproj_version" != "$tag_version" ]; then
-            echo "::error::Tag version ($tag_version) does not match csproj version ($csproj_version)"
-            exit 1
-          fi
+          # Both packages ship together, so a tag that matches one but not the other would publish
+          # a mismatched pair.
+          for csproj in src/StormSocket/StormSocket.csproj src/StormSocket.Extensions.Hosting/StormSocket.Extensions.Hosting.csproj; do
+            csproj_version=$(grep -oP '(?<=<Version>).*(?=</Version>)' "$csproj")
+            if [ "$csproj_version" != "$tag_version" ]; then
+              echo "::error::Tag version ($tag_version) does not match version in $csproj ($csproj_version)"
+              exit 1
+            fi
+          done
 
       - name: Push to NuGet
         if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'

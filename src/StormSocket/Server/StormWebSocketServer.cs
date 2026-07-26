@@ -37,6 +37,8 @@ public class StormWebSocketServer : IAsyncDisposable
     private Socket? _listenSocket;
     private CancellationTokenSource? _cts;
     private Task? _acceptTask;
+    private int _running;
+    private readonly ConnectionTracker _connections = new();
     private readonly MiddlewarePipeline _pipeline = new();
     private bool _disposed;
 
@@ -55,6 +57,12 @@ public class StormWebSocketServer : IAsyncDisposable
     /// Bind to port 0 and read this to discover the port the OS assigned.
     /// </summary>
     public EndPoint? LocalEndPoint => _listenSocket?.LocalEndPoint;
+
+    /// <summary>
+    /// True between a successful <see cref="StartAsync"/> and <see cref="StopAsync"/>. A start that
+    /// fails to bind leaves this false, so a host observes the failure instead of a dead server.
+    /// </summary>
+    public bool IsRunning => Volatile.Read(ref _running) is 1;
 
     /// <summary>All currently connected WebSocket sessions.</summary>
     public SessionManager Sessions { get; } = new();
@@ -197,72 +205,109 @@ public class StormWebSocketServer : IAsyncDisposable
     }
 
     /// <summary>Binds to the configured endpoint and starts accepting WebSocket connections.</summary>
+    /// <exception cref="ArgumentException">The options describe a configuration the server cannot use.</exception>
+    /// <exception cref="InvalidOperationException">The server is already running.</exception>
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _options.Validate();
+
+        if (Interlocked.CompareExchange(ref _running, 1, 0) is not 0)
+        {
+            throw new InvalidOperationException("StormWebSocketServer is already running. Call StopAsync before starting it again.");
+        }
+
+        // Retired here rather than in StopAsync: a handler abandoned by a forced shutdown may still
+        // hold the previous token, and disposing the source out from under it would fault it.
+        _cts?.Dispose();
+        _cts = null;
 
         bool isUnix = _options.EndPoint is UnixDomainSocketEndPoint;
+        Socket? listenSocket = null;
 
-        if (isUnix)
+        try
         {
-            _listenSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        }
-        else if (_options.DualMode)
-        {
-            _listenSocket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
-            _listenSocket.DualMode = true;
-        }
-        else
-        {
-            _listenSocket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-        }
-
-        if (!isUnix)
-        {
-            _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-
-            if (_options.Socket.NoDelay)
+            if (isUnix)
             {
-                _listenSocket.NoDelay = true;
+                listenSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             }
-        }
+            else if (_options.DualMode)
+            {
+                listenSocket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+                listenSocket.DualMode = true;
+            }
+            else
+            {
+                listenSocket = new Socket(_options.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            }
 
-        EndPoint bindEndPoint = isUnix
-            ? _options.EndPoint
-            : _options.DualMode
-                ? new IPEndPoint(IPAddress.IPv6Any, ((IPEndPoint)_options.EndPoint).Port)
+            if (!isUnix)
+            {
+                listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
+                if (_options.Socket.NoDelay)
+                {
+                    listenSocket.NoDelay = true;
+                }
+            }
+
+            EndPoint bindEndPoint = _options.DualMode && _options.EndPoint is IPEndPoint ipEndPoint
+                ? new IPEndPoint(IPAddress.IPv6Any, ipEndPoint.Port)
                 : _options.EndPoint;
 
-        // Remove stale socket file for Unix domain sockets
-        if (isUnix && _options.EndPoint is UnixDomainSocketEndPoint udsEndPoint)
-        {
-            string? path = udsEndPoint.ToString();
-            if (path is not null && File.Exists(path))
+            // Remove stale socket file for Unix domain sockets
+            if (isUnix && _options.EndPoint is UnixDomainSocketEndPoint udsEndPoint)
             {
-                File.Delete(path);
+                string? path = udsEndPoint.ToString();
+                if (path is not null && File.Exists(path))
+                {
+                    File.Delete(path);
+                }
             }
+
+            listenSocket.Bind(bindEndPoint);
+            listenSocket.Listen(_options.Backlog);
+
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _connections.Open();
+            _listenSocket = listenSocket;
+            _acceptTask = AcceptLoopAsync(_cts.Token);
+            _logger.LogInformation("WebSocket server listening on {EndPoint}", bindEndPoint);
+        }
+        catch
+        {
+            // Nothing is left half-started: the socket and the source go away and IsRunning stays
+            // false, so a host sees the failure instead of a server that is up but never accepts.
+            listenSocket?.Dispose();
+            _cts?.Dispose();
+            _listenSocket = null;
+            _cts = null;
+            Volatile.Write(ref _running, 0);
+            throw;
         }
 
-        _listenSocket.Bind(bindEndPoint);
-        _listenSocket.Listen(_options.Backlog);
-
-        _acceptTask = AcceptLoopAsync(_cts.Token);
-        _logger.LogInformation("WebSocket server listening on {EndPoint}", bindEndPoint);
         return Task.CompletedTask;
     }
 
-    /// <summary>Stops accepting new connections and closes all active sessions.</summary>
-    public async Task StopAsync()
+    /// <summary>
+    /// Stops accepting new connections, sends a GoingAway close to every session and closes them,
+    /// and then waits for the in-flight connection handlers to finish unwinding before returning.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Bounds the drain alongside <see cref="ServerOptions.ShutdownDrainTimeout"/>, whichever comes
+    /// first. Cancelling it is a normal "stop waiting and force it" signal from a host, so neither a
+    /// spent drain budget nor a cancelled token throws.
+    /// </param>
+    public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (_cts is null)
+        if (Interlocked.Exchange(ref _running, 0) is 0)
         {
             return;
         }
 
 #if NET8_0_OR_GREATER
-        await _cts.CancelAsync().ConfigureAwait(false);
+        await _cts!.CancelAsync().ConfigureAwait(false);
 #else
-        _cts.Cancel();
+        _cts!.Cancel();
 #endif
 
         _listenSocket?.Close();
@@ -279,9 +324,15 @@ public class StormWebSocketServer : IAsyncDisposable
             }
         }
 
+        // Every handler the accept loop was going to start has been registered by now, so nothing
+        // can slip in behind the drain's snapshot.
+        _connections.Close();
+
         // Send GoingAway close to all connected sessions
+        int sessionCount = 0;
         foreach (ISession s in Sessions.All)
         {
+            sessionCount++;
             if (s is WebSocketSession ws && ws.State == ConnectionState.Connected)
             {
                 ws.SetDisconnectReason(DisconnectReason.GoingAway);
@@ -296,8 +347,20 @@ public class StormWebSocketServer : IAsyncDisposable
             }
         }
 
+        // Before the drain, not after: a handler parked in a write that only the peer can unblock
+        // ends when its session closes, so waiting first would just spend the whole budget.
         await Sessions.CloseAllAsync().ConfigureAwait(false);
-        _logger.LogInformation("WebSocket server stopped, {Count} sessions closed", Sessions.Count);
+
+        int stillRunning = await _connections.DrainAsync(_options.ShutdownDrainTimeout, cancellationToken).ConfigureAwait(false);
+        if (stillRunning > 0)
+        {
+            _logger.LogWarning(
+                "WebSocket server drain ended with {Count} connection(s) still active after {Timeout}; they are being abandoned",
+                stillRunning,
+                _options.ShutdownDrainTimeout);
+        }
+
+        _logger.LogInformation("WebSocket server stopped, {Count} sessions closed", sessionCount);
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -341,7 +404,7 @@ public class StormWebSocketServer : IAsyncDisposable
 
             _options.Socket.ApplyKeepAlive(clientSocket);
 
-            _ = HandleConnectionAsync(clientSocket, lease, ct);
+            _connections.Track(HandleConnectionAsync(clientSocket, lease, ct));
         }
     }
 

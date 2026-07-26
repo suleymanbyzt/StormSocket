@@ -129,6 +129,10 @@ public class StormTcpClient : IAsyncDisposable
     /// <summary>Connects to the server. If auto-reconnect is enabled, reconnects on disconnect.</summary>
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
+        // Checked here rather than deeper in, so a misconfiguration is reported by the call the
+        // application made instead of surfacing as a failure inside the handshake.
+        _options.Validate();
+
         // A previous source still holds a registration on the token it was linked to.
         _cts?.Dispose();
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

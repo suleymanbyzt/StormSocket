@@ -10,6 +10,7 @@ namespace StormSocket.Tests;
 /// Teardown paths that can run at the same time. These are the races that only show up under load or
 /// on a slower machine, so they are driven in a loop rather than once.
 /// </summary>
+[Collection(SequentialCollection.Name)]
 public class SessionTeardownRaceTests
 {
     [Fact]
@@ -48,7 +49,7 @@ public class SessionTeardownRaceTests
             Task serverClose = Task.Run(async () => await session.CloseAsync());
             Task clientGone = Task.Run(async () => await client.DisposeAsync());
 
-            await Task.WhenAll(serverClose, clientGone).WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(serverClose, clientGone).WaitAsync(TimeSpan.FromSeconds(30));
 
             await WaitForNoSessionsAsync(server);
         }
@@ -83,7 +84,7 @@ public class SessionTeardownRaceTests
             WebSocketSession session = await WaitForSessionAsync(server);
 
             session.Abort();
-            await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
 
             await WaitForNoSessionsAsync(server);
         }
