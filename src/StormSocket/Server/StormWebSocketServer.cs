@@ -59,7 +59,7 @@ public class StormWebSocketServer : IAsyncDisposable
     public EndPoint? LocalEndPoint => _listenSocket?.LocalEndPoint;
 
     /// <summary>
-    /// True between a successful <see cref="StartAsync"/> and <see cref="StopAsync"/>. A start that
+    /// True between a successful <see cref="StartAsync"/> and <see cref="StopAsync(CancellationToken)"/>. A start that
     /// fails to bind leaves this false, so a host observes the failure instead of a dead server.
     /// </summary>
     public bool IsRunning => Volatile.Read(ref _running) is 1;
@@ -297,8 +297,27 @@ public class StormWebSocketServer : IAsyncDisposable
     /// first. Cancelling it is a normal "stop waiting and force it" signal from a host, so neither a
     /// spent drain budget nor a cancelled token throws.
     /// </param>
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => StopAsync(_options.ShutdownDrainTimeout, cancellationToken);
+
+    /// <summary>
+    /// Stops the server, overriding <see cref="ServerOptions.ShutdownDrainTimeout"/> for this call.
+    /// </summary>
+    /// <param name="drainTimeout">
+    /// How long to wait for in-flight connection handlers. <see cref="TimeSpan.Zero"/> skips the wait
+    /// and closes everything immediately.
+    /// </param>
+    /// <param name="cancellationToken">Bounds the drain alongside <paramref name="drainTimeout"/>, whichever comes first.</param>
+    public async Task StopAsync(TimeSpan drainTimeout, CancellationToken cancellationToken = default)
     {
+        // Timeout.InfiniteTimeSpan is negative by definition and means "wait as long as it takes",
+        // which is a legitimate choice when the caller bounds the wait with its own token instead.
+        if (drainTimeout < TimeSpan.Zero && drainTimeout != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(drainTimeout), drainTimeout, "Drain timeout must not be negative, other than Timeout.InfiniteTimeSpan.");
+        }
+
         if (Interlocked.Exchange(ref _running, 0) is 0)
         {
             return;
@@ -351,13 +370,13 @@ public class StormWebSocketServer : IAsyncDisposable
         // ends when its session closes, so waiting first would just spend the whole budget.
         await Sessions.CloseAllAsync().ConfigureAwait(false);
 
-        int stillRunning = await _connections.DrainAsync(_options.ShutdownDrainTimeout, cancellationToken).ConfigureAwait(false);
+        int stillRunning = await _connections.DrainAsync(drainTimeout, cancellationToken).ConfigureAwait(false);
         if (stillRunning > 0)
         {
             _logger.LogWarning(
                 "WebSocket server drain ended with {Count} connection(s) still active after {Timeout}; they are being abandoned",
                 stillRunning,
-                _options.ShutdownDrainTimeout);
+                drainTimeout);
         }
 
         _logger.LogInformation("WebSocket server stopped, {Count} sessions closed", sessionCount);
@@ -624,7 +643,10 @@ public class StormWebSocketServer : IAsyncDisposable
             switch (upgradeResult)
             {
                 case WsUpgradeResult.Success:
-                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    // Consumed only, deliberately not examined: a client may pipeline its first frame
+                    // into the same segment as the upgrade request, and marking those bytes examined
+                    // would leave them buffered until more data arrives.
+                    reader.AdvanceTo(buffer.Start);
 
                     // Fire OnConnecting event if registered
                     if (_onConnecting.HasHandlers)

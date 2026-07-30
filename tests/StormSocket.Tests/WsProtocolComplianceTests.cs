@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using StormSocket.Client;
 using StormSocket.Server;
 using StormSocket.Session;
 using StormSocket.WebSocket;
@@ -139,6 +140,101 @@ public class WsProtocolComplianceTests
         await stream.WriteAsync(MaskedFrame(opCodeByte, []));
 
         Assert.Equal(0, await received.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task FramePipelinedWithTheHandshake_IsDeliveredWithoutWaitingForMoreData()
+    {
+        // A peer may put its first frame in the same segment as the handshake. If the upgrade parser
+        // marks those bytes examined without consuming them, the pipe holds them back until more data
+        // arrives — and a peer that sends nothing else waits forever.
+        (StormWebSocketServer server, int port) = await StartServerAsync();
+        await using StormWebSocketServer _ = server;
+
+        TaskCompletionSource<string> received = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.OnMessageReceived += (_, msg) =>
+        {
+            received.TrySetResult(msg.Text);
+            return ValueTask.CompletedTask;
+        };
+
+        using TcpClient tcp = new();
+        await tcp.ConnectAsync(IPAddress.Loopback, port);
+        using NetworkStream stream = tcp.GetStream();
+
+        string key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        byte[] request = Encoding.ASCII.GetBytes(
+            $"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+            $"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n");
+        byte[] frame = MaskedFrame(0x81, "pipelined"u8);
+
+        // One write, so the request and the frame land together.
+        byte[] combined = new byte[request.Length + frame.Length];
+        request.CopyTo(combined, 0);
+        frame.CopyTo(combined, request.Length);
+        await stream.WriteAsync(combined);
+
+        Assert.Equal("pipelined", await received.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task ClientHandlesAFramePipelinedWithTheHandshakeResponse()
+    {
+        // The mirror image on the client: the server answers 101 and immediately sends a frame in the
+        // same segment.
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        Task serverSide = Task.Run(async () =>
+        {
+            using Socket socket = await listener.AcceptSocketAsync();
+            using NetworkStream stream = new(socket, ownsSocket: false);
+
+            byte[] buffer = new byte[2048];
+            int read = await stream.ReadAsync(buffer);
+            string request = Encoding.ASCII.GetString(buffer, 0, read);
+            string key = request.Split("Sec-WebSocket-Key:")[1].Split("\r\n")[0].Trim();
+            string accept = Convert.ToBase64String(
+                SHA1.HashData(Encoding.ASCII.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
+
+            byte[] response = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                $"Sec-WebSocket-Accept: {accept}\r\n\r\n");
+
+            // Server frames are not masked.
+            byte[] payload = "pipelined"u8.ToArray();
+            byte[] frame = new byte[2 + payload.Length];
+            frame[0] = 0x81;
+            frame[1] = (byte)payload.Length;
+            payload.CopyTo(frame.AsSpan(2));
+
+            byte[] combined = new byte[response.Length + frame.Length];
+            response.CopyTo(combined, 0);
+            frame.CopyTo(combined, response.Length);
+            await stream.WriteAsync(combined);
+
+            // Stay open: the point is that the client must not need more data to see the frame.
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        });
+
+        await using StormWebSocketClient client = new(new WsClientOptions
+        {
+            Uri = new Uri($"ws://127.0.0.1:{port}"),
+            Heartbeat = new() { PingInterval = TimeSpan.Zero },
+        });
+
+        TaskCompletionSource<string> received = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.OnMessageReceived += msg =>
+        {
+            received.TrySetResult(msg.Text);
+            return ValueTask.CompletedTask;
+        };
+
+        await client.ConnectAsync();
+
+        Assert.Equal("pipelined", await received.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        listener.Stop();
     }
 
     [Fact]

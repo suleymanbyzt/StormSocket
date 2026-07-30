@@ -119,3 +119,92 @@ jobs:
             cat failed.txt
             exit 1
           fi
+
+  client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: client conformance
+
+    # The suite has two halves. The job above tests this library's server against a hostile client;
+    # this one inverts it — Autobahn plays the server, sending malformed frames, bad UTF-8 and
+    # invalid close bodies, and judges what our client does with them.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build echo client
+        run: dotnet build benchmark/autobahn/AutobahnEchoClient -c Release
+
+      - name: Start fuzzing server
+        run: |
+          mkdir -p benchmark/autobahn/reports
+          docker run -d --name autobahn-fuzzingserver \
+            -p 9001:9001 \
+            -v "${PWD}/benchmark/autobahn:/config" \
+            -v "${PWD}/benchmark/autobahn/reports:/reports" \
+            crossbario/autobahn-testsuite \
+            wstest --mode fuzzingserver --spec /config/fuzzingserver.json
+          for i in $(seq 1 30); do
+            if nc -z localhost 9001; then echo "fuzzing server up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::fuzzing server did not start"
+          docker logs autobahn-fuzzingserver
+          exit 1
+
+      - name: Run echo client
+        timeout-minutes: 15
+        run: dotnet run --no-build -c Release --project benchmark/autobahn/AutobahnEchoClient localhost 9001
+
+      - name: Stop fuzzing server
+        if: always()
+        run: docker rm -f autobahn-fuzzingserver || true
+
+      - name: Take ownership of the report
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" benchmark/autobahn/reports || true
+
+      - name: Summarize results
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib, sys
+
+          index = pathlib.Path("benchmark/autobahn/reports/clients/index.json")
+          if not index.exists():
+              print("::error::no Autobahn report produced")
+              sys.exit(1)
+
+          results = json.loads(index.read_text())["StormSocket"]
+          acceptable = ("OK", "INFORMATIONAL", "NON-STRICT", "UNIMPLEMENTED")
+
+          failed = {case: f"{r['behavior']} / close: {r.get('behaviorClose', '-')}"
+                    for case, r in results.items()
+                    if r["behavior"] not in acceptable
+                    or r.get("behaviorClose", "OK") not in acceptable}
+
+          print(f"## Autobahn client: {len(results) - len(failed)}/{len(results)} cases passed")
+          if failed:
+              print("\n| Case | Behavior |\n|---|---|")
+              for case, behavior in sorted(failed.items()):
+                  print(f"| {case} | {behavior} |")
+
+          pathlib.Path("failed.txt").write_text("\n".join(sorted(failed)))
+          PY
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-report-client
+          path: benchmark/autobahn/reports/
+
+      - name: Fail on non-conforming cases
+        run: |
+          if [ -s failed.txt ]; then
+            echo "::error::Autobahn reported non-conforming cases:"
+            cat failed.txt
+            exit 1
+          fi

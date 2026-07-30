@@ -50,7 +50,7 @@ public class StormTcpServer : IAsyncDisposable
     public EndPoint? LocalEndPoint => _listenSocket?.LocalEndPoint;
 
     /// <summary>
-    /// True between a successful <see cref="StartAsync"/> and <see cref="StopAsync"/>. A start that
+    /// True between a successful <see cref="StartAsync"/> and <see cref="StopAsync(CancellationToken)"/>. A start that
     /// fails to bind leaves this false, so a host observes the failure instead of a dead server.
     /// </summary>
     public bool IsRunning => Volatile.Read(ref _running) is 1;
@@ -264,8 +264,27 @@ public class StormTcpServer : IAsyncDisposable
     /// first. Cancelling it is a normal "stop waiting and force it" signal from a host, so neither a
     /// spent drain budget nor a cancelled token throws.
     /// </param>
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => StopAsync(_options.ShutdownDrainTimeout, cancellationToken);
+
+    /// <summary>
+    /// Stops the server, overriding <see cref="ServerOptions.ShutdownDrainTimeout"/> for this call.
+    /// </summary>
+    /// <param name="drainTimeout">
+    /// How long to wait for in-flight connection handlers. <see cref="TimeSpan.Zero"/> skips the wait
+    /// and closes everything immediately.
+    /// </param>
+    /// <param name="cancellationToken">Bounds the drain alongside <paramref name="drainTimeout"/>, whichever comes first.</param>
+    public async Task StopAsync(TimeSpan drainTimeout, CancellationToken cancellationToken = default)
     {
+        // Timeout.InfiniteTimeSpan is negative by definition and means "wait as long as it takes",
+        // which is a legitimate choice when the caller bounds the wait with its own token instead.
+        if (drainTimeout < TimeSpan.Zero && drainTimeout != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(drainTimeout), drainTimeout, "Drain timeout must not be negative, other than Timeout.InfiniteTimeSpan.");
+        }
+
         if (Interlocked.Exchange(ref _running, 0) is 0)
         {
             return;
@@ -299,13 +318,13 @@ public class StormTcpServer : IAsyncDisposable
         // ends when its session closes, so waiting first would just spend the whole budget.
         await Sessions.CloseAllAsync().ConfigureAwait(false);
 
-        int stillRunning = await _connections.DrainAsync(_options.ShutdownDrainTimeout, cancellationToken).ConfigureAwait(false);
+        int stillRunning = await _connections.DrainAsync(drainTimeout, cancellationToken).ConfigureAwait(false);
         if (stillRunning > 0)
         {
             _logger.LogWarning(
                 "TCP server drain ended with {Count} connection(s) still active after {Timeout}; they are being abandoned",
                 stillRunning,
-                _options.ShutdownDrainTimeout);
+                drainTimeout);
         }
 
         _logger.LogInformation("TCP server stopped");
@@ -408,8 +427,17 @@ public class StormTcpServer : IAsyncDisposable
                     session.Metrics.AddBytesReceived(data.Length);
                     Metrics.RecordMessageReceived(data.Length);
 
-                    ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(session, data).ConfigureAwait(false);
-                    if (processed.IsEmpty) return;
+                    // An empty result means a middleware suppressed the data; an empty framed message
+                    // is not the same thing and must still reach the application.
+                    ReadOnlyMemory<byte> processed = data;
+                    if (_pipeline.HasMiddleware)
+                    {
+                        processed = await _pipeline.OnDataReceivedAsync(session, data).ConfigureAwait(false);
+                        if (processed.IsEmpty && !data.IsEmpty)
+                        {
+                            return;
+                        }
+                    }
 
                     foreach (DataReceivedHandler handler in _onDataReceived.Handlers)
                     {

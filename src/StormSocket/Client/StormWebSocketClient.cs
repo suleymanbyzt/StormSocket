@@ -360,7 +360,10 @@ public class StormWebSocketClient : IAsyncDisposable
 
             if (state == WsUpgradeResponseState.Accepted)
             {
-                reader.AdvanceTo(buffer.Start, buffer.End);
+                // Consumed only, deliberately not examined: a server may put its first frame in the
+                // same segment as the 101 response, and marking those bytes examined would leave them
+                // buffered until more data arrives — stalling a frame that has already been received.
+                reader.AdvanceTo(buffer.Start);
                 return (true, extensions, subprotocol);
             }
 
@@ -550,10 +553,16 @@ public class StormWebSocketClient : IAsyncDisposable
     {
         Metrics.AddBytesReceived(msg.Data.Length);
 
-        ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, msg.Data).ConfigureAwait(false);
-        if (processed.IsEmpty)
+        // An empty result means a middleware suppressed the message — but a zero-length message is
+        // legal in RFC 6455 and must still reach the application, so the two are told apart by
+        // whether there was anything to suppress in the first place.
+        if (_pipeline.HasMiddleware)
         {
-            return;
+            ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, msg.Data).ConfigureAwait(false);
+            if (processed.IsEmpty && !msg.Data.IsEmpty)
+            {
+                return;
+            }
         }
 
         foreach (ClientWsMessageReceivedHandler handler in _onMessageReceived.Handlers)

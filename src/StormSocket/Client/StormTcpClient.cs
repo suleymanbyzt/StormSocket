@@ -220,10 +220,16 @@ public class StormTcpClient : IAsyncDisposable
                 {
                     Metrics.AddBytesReceived(data.Length);
 
-                    ReadOnlyMemory<byte> processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, data).ConfigureAwait(false);
-                    if (processed.IsEmpty)
+                    // An empty result means a middleware suppressed the data; an empty frame is not
+                    // the same thing and must still reach the application.
+                    ReadOnlyMemory<byte> processed = data;
+                    if (_pipeline.HasMiddleware)
                     {
-                        return;
+                        processed = await _pipeline.OnDataReceivedAsync(sessionAdapter, data).ConfigureAwait(false);
+                        if (processed.IsEmpty && !data.IsEmpty)
+                        {
+                            return;
+                        }
                     }
 
                     // A throwing handler must not take the read loop down with it.

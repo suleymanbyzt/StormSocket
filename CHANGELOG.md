@@ -4,6 +4,42 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.0]
+
+Running the Autobahn Testsuite against the **client** for the first time — the one surface that had
+never been verified — found two defects that no unit test had reached.
+
+### Fixed
+
+- **A frame arriving in the same TCP segment as the handshake was stalled until more data arrived.**
+  The upgrade parser marked the leftover bytes examined without consuming them, which in
+  `System.IO.Pipelines` means the next read waits for new data. A peer that pipelines its first frame
+  onto the handshake and then goes quiet — exactly what the test suite does — was never seen at all.
+  Measured on the client: noticing a Close frame took 25 s before the fix and 34 ms after, with
+  `DisposeAsync` dropping from 5 s to 0 ms. Present on both the server and the client.
+- **Zero-length messages were dropped by the clients and the TCP server**, the same middleware
+  "empty means suppressed" confusion fixed in the WebSocket server in 5.0.0. An empty message is
+  legal (RFC 6455 Section 5.2) and is used as a keepalive by real clients.
+
+### Added
+
+- `StopAsync(TimeSpan drainTimeout, CancellationToken)` on both servers, overriding
+  `ServerOptions.ShutdownDrainTimeout` for a single call. `Timeout.InfiniteTimeSpan` waits as long as
+  the caller's token allows.
+- The client conformance suite runs in CI alongside the server one
+  (`.github/workflows/autobahn.yml`), and a nightly job (`.github/workflows/nightly.yml`) drives
+  connection churn, message load and abnormal teardowns, failing if sessions, groups, connections or
+  file descriptors do not return to zero.
+- `docs/comparison.md` — where SignalR, Kestrel, NetCoreServer and the smaller libraries fit, and
+  when to use them instead.
+
+### Conformance
+
+| Suite | Result |
+|---|---|
+| Server, correctness sections | 247 / 247 |
+| Client | 463 / 463 (72 reported `UNIMPLEMENTED`: the compression window parameter this library declines) |
+
 ## [5.1.0]
 
 Integration and lifecycle work on top of 5.0.0: a StormSocket server can now be part of a .NET
@@ -235,5 +271,6 @@ The README previously claimed full RFC 6455 compliance. These were the gaps:
 10. **`wss://` connections now honor `MaxPendingSendBytes` / `MaxPendingReceiveBytes`.** Applications
     that unknowingly relied on the 64 KB default will see different backpressure behavior.
 
+[5.2.0]: https://github.com/suleymanbyzt/StormSocket/releases/tag/v5.2.0
 [5.1.0]: https://github.com/suleymanbyzt/StormSocket/releases/tag/v5.1.0
 [5.0.0]: https://github.com/suleymanbyzt/StormSocket/releases/tag/v5.0.0

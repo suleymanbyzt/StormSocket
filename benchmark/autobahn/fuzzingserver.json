@@ -1,0 +1,8 @@
+{
+  "url": "ws://127.0.0.1:9001",
+  "outdir": "/reports/clients",
+  "cases": ["*"],
+  "__comment_exclude": "Section 9 is a throughput sweep with 16 MB payloads: it takes longer than the rest of the suite combined and measures the machine, not conformance.",
+  "exclude-cases": ["9.*"],
+  "exclude-agent-cases": {}
+}

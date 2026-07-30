@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://github.com/suleymanbyzt/StormSocket/actions"><img src="https://img.shields.io/github/actions/workflow/status/suleymanbyzt/StormSocket/ci.yml?branch=master" alt="Build" /></a>
   <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/suleymanbyzt/536cdf59b30363682a17ef0927ed7f45/raw/stormsocket-coverage.json" alt="Coverage" />
+  <a href="https://github.com/suleymanbyzt/StormSocket/actions/workflows/autobahn.yml"><img src="https://img.shields.io/github/actions/workflow/status/suleymanbyzt/StormSocket/autobahn.yml?branch=master&label=autobahn" alt="Autobahn" /></a>
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/v/StormSocket.svg" alt="NuGet" /></a>
   <a href="https://www.nuget.org/packages/StormSocket"><img src="https://img.shields.io/nuget/dt/StormSocket.svg" alt="NuGet Downloads" /></a>
   <a href="https://github.com/suleymanbyzt/StormSocket/stargazers"><img src="https://img.shields.io/github/stars/suleymanbyzt/StormSocket" alt="Stars" /></a>
@@ -19,7 +20,7 @@
 <p align="center">Modern, high-performance, event-based TCP/WebSocket/SSL library for .NET built on <b>System.IO.Pipelines</b>.</p>
 
 <p align="center">
-  <a href="https://suleymanbyzt.github.io/StormSocket/docs/getting-started.html"><b>Getting Started</b></a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/features.html">Features</a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/configuration.html">Configuration</a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/examples.html">Examples</a>
+  <a href="https://suleymanbyzt.github.io/StormSocket/docs/getting-started.html"><b>Getting Started</b></a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/comparison.html">Why StormSocket?</a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/features.html">Features</a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/configuration.html">Configuration</a> · <a href="https://suleymanbyzt.github.io/StormSocket/docs/examples.html">Examples</a>
 </p>
 
 Zero subclassing required. Subscribe to events, configure options, and go. Server and client included.
@@ -37,7 +38,7 @@ Zero subclassing required. Subscribe to events, configure options, and go. Serve
 
 - **Event-based API** - no subclassing, just `server.OnDataReceived += handler`
 - **TCP Server & Client** with optional message framing (raw, length-prefix, delimiter)
-- **WebSocket Server & Client** built to RFC 6455, **247/247 Autobahn Testsuite conformance cases passing** — it *validates* the protocol rather than only speaking it: masking enforced in both directions, incremental UTF-8 validation across fragments (1007), close-code and close-reason validation (1002/1007), single close frame with a proper closing handshake, control-frame and frame-length rules, strict handshake validation
+- **WebSocket Server & Client** built to RFC 6455, with the Autobahn Testsuite passing **247/247 on the server and 463/463 on the client** — it *validates* the protocol rather than only speaking it: masking enforced in both directions, incremental UTF-8 validation across fragments (1007), close-code and close-reason validation (1002/1007), single close frame with a proper closing handshake, control-frame and frame-length rules, strict handshake validation
 - **SSL/TLS** as a simple configuration option on any server or client
 - **Auto-reconnect** - clients automatically reconnect on disconnect with configurable delay and max attempts
 - **System.IO.Pipelines** — received payloads are handed to handlers without a copy where the protocol allows it, with backpressure that reaches the socket
@@ -352,18 +353,26 @@ a server and judges both the reply and the close.
 
 | Suite | Result |
 |---|---|
-| Correctness (sections 1-8, 10) | **247 / 247** |
-| permessage-deflate (12, 13) | 180 / 216, plus 36 reported `UNIMPLEMENTED` |
+| Server — correctness (sections 1-8, 10) | **247 / 247** |
+| Server — permessage-deflate (12, 13) | 180 / 216, plus 36 reported `UNIMPLEMENTED` |
+| Client | **463 / 463**, of which 72 reported `UNIMPLEMENTED` |
 
-The `UNIMPLEMENTED` cases ask the server to compress with a smaller LZ77 window. `DeflateStream`
+Both halves of the suite run: the server is tested against a hostile client, and the client against a
+hostile server. The `UNIMPLEMENTED` cases ask for compression with a smaller LZ77 window. `DeflateStream`
 exposes no window-size control, so those offers are declined rather than accepted and quietly
 ignored, which is what RFC 7692 Section 7.1.2.2 asks for. Both suites run in CI on every push
 (`.github/workflows/autobahn.yml`) and the full report is published as a build artifact.
 
 ```bash
+# server: the suite plays the client
 dotnet run -c Release --project benchmark/autobahn/AutobahnEchoServer 9001
 docker run --rm -v "$PWD/benchmark/autobahn:/config" -v "$PWD/benchmark/autobahn/reports:/reports" \
   crossbario/autobahn-testsuite wstest --mode fuzzingclient --spec /config/fuzzingclient.json
+
+# client: the suite plays the server
+docker run --rm -p 9001:9001 -v "$PWD/benchmark/autobahn:/config" -v "$PWD/benchmark/autobahn/reports:/reports" \
+  crossbario/autobahn-testsuite wstest --mode fuzzingserver --spec /config/fuzzingserver.json
+dotnet run -c Release --project benchmark/autobahn/AutobahnEchoClient localhost 9001
 ```
 
 ### Frame decoding
@@ -392,6 +401,7 @@ and it is a trade this project is willing to make. Allocation per message on the
 | Guide | Description |
 |---|---|
 | [Getting Started](docs/getting-started.md) | Installation, first TCP server, first WebSocket server |
+| [Why StormSocket?](docs/comparison.md) | Honest comparison with SignalR, Kestrel WebSockets, NetCoreServer and others — including when to use them instead |
 | [Examples](docs/examples.md) | TCP echo, WebSocket chat, auth, SSL, clients, admin console |
 | [Features Guide](docs/features.md) | Sessions, groups, framing, heartbeat, slow consumer, rate limiting, fragmentation, disconnect reasons |
 | [Middleware](docs/middleware.md) | Pipeline, custom middleware, built-in rate limiting |

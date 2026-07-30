@@ -1,0 +1,71 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:17 UTC — off the hour, where GitHub's scheduler is least congested.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Measured soak duration in seconds'
+        required: false
+        default: '90'
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: Resource soak
+    runs-on: ubuntu-latest
+    # The soak itself is warmup + measured + drain (~2.5 minutes at the default duration); the rest
+    # of the budget covers restore and build, and caps a run that hangs instead of leaking.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Build
+        run: dotnet build benchmark/StormSocket.Benchmark.Soak/StormSocket.Benchmark.Soak.csproj --configuration Release -warnaserror
+
+      - name: Run resource soak
+        # The duration goes through the environment rather than straight into the script, so a
+        # dispatch input can only ever be an argument and never part of the command.
+        env:
+          SOAK_SECONDS: ${{ github.event.inputs.seconds || '90' }}
+        run: |
+          set -o pipefail
+          dotnet run --project benchmark/StormSocket.Benchmark.Soak/StormSocket.Benchmark.Soak.csproj \
+            --configuration Release --no-build \
+            -- --seconds "$SOAK_SECONDS" | tee soak.log
+
+      - name: Write soak report to job summary
+        # Runs on failure too: the numbers are the whole point of the job, and a failed run is
+        # exactly when someone needs to read them.
+        if: always()
+        run: |
+          {
+            echo "## Resource soak"
+            echo
+            echo '```'
+            cat soak.log 2>/dev/null || echo '(the soak produced no output)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload soak log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-log
+          path: soak.log
