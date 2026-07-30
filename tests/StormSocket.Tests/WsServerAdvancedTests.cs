@@ -15,6 +15,21 @@ public class WsServerAdvancedTests
     private static int _nextPort = 19000;
     private static int GetPort() => Interlocked.Increment(ref _nextPort);
 
+    /// <summary>
+    /// Waits until the server has registered the connection. A client's ConnectAsync returns as soon
+    /// as the socket is connected, which can be before the accept loop has created the session — so a
+    /// test that closes sessions immediately afterwards may find none and close nothing.
+    /// </summary>
+    private static async Task WaitForSessionCountAsync(int expected, Func<int> actual)
+    {
+        for (int attempt = 0; attempt < 200 && actual() < expected; attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(expected, actual());
+    }
+
     [Fact]
     public async Task OnConnecting_Reject_FailsClientUpgrade()
     {
@@ -440,6 +455,7 @@ public class WsServerAdvancedTests
             };
 
             await client.ConnectAsync();
+            await WaitForSessionCountAsync(1, () => server.Sessions.Count);
 
             // Force disconnect all server sessions
             foreach (var s in server.Sessions.All)
@@ -491,6 +507,7 @@ public class WsServerAdvancedTests
             };
 
             await client.ConnectAsync();
+            await WaitForSessionCountAsync(1, () => server.Sessions.Count);
 
             // Force close all server sessions
             await server.Sessions.CloseAllAsync();
